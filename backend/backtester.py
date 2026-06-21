@@ -4,7 +4,7 @@ from typing import Dict, List, Any
 from backend.smc_engine import calculate_smc
 
 def run_backtest(df: pd.DataFrame, 
-                 initial_balance: float = 10000.0,
+                 initial_balance: float = 1600.0,
                  risk_pct: float = 1.0, # 1% risk per trade
                  rr_ratio: float = 2.0,  # 2:1 Risk to Reward
                  N_swing: int = 2,

@@ -80,7 +80,7 @@ class ConfigUpdate(BaseModel):
 class BacktestRequest(BaseModel):
     symbol: str
     timeframe: str
-    initial_balance: float = 10000.0
+    initial_balance: float = 1600.0
     risk_pct: float = 1.0
     rr_ratio: float = 2.0
     n_swing: int = 2
