@@ -122,6 +122,36 @@ class LiveTrader:
             except RuntimeError:
                 pass
 
+    def liquidate_all_trades(self):
+        symbols_to_close = list(self.active_trades.keys())
+        if not symbols_to_close:
+            self.log_message("No active positions to liquidate.")
+            return
+            
+        for symbol in symbols_to_close:
+            trade = self.active_trades[symbol]
+            trade_type = trade['type']
+            entry_price = trade['entry_price']
+            size = trade['size']
+            
+            # Fetch latest price
+            exit_price = entry_price
+            df = self.dfs.get(symbol)
+            if df is not None and len(df) > 0:
+                exit_price = float(df.iloc[-1]['close'])
+                
+            # Calculate PnL
+            if trade_type == 'long':
+                pnl = (exit_price - entry_price) * size
+            else: # short
+                pnl = (entry_price - exit_price) * size
+                
+            self.paper_balance += pnl
+            self.close_trade(symbol, exit_price, pnl, "LIQ")
+            
+        self.save_trades()
+        self.log_message("All active positions have been liquidated.")
+
     async def broadcast_current_state(self):
         if not self.websocket_broadcast_callback:
             return

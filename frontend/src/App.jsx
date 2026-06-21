@@ -535,9 +535,33 @@ export default function App() {
 
               {/* Active Position Card */}
               <div className="glass-card">
-                <h3 style={styles.cardTitle}>Active SMC Positions</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                  <h3 style={{ ...styles.cardTitle, margin: 0 }}>Active SMC Positions</h3>
+                  {Object.keys(activeTrades).length > 0 && (
+                    <button 
+                      onClick={async () => {
+                        if (window.confirm("Are you sure you want to liquidate all active positions at their current market prices?")) {
+                          try {
+                            const res = await fetch(`http://${window.location.hostname}:8000/trades/liquidate`, { method: 'POST' });
+                            const data = await res.json();
+                            setActiveTrades(data.active_trades || {});
+                            setTradeHistory(data.trade_history || []);
+                            setBalance(data.paper_balance || 10000.0);
+                            alert("All active positions liquidated successfully.");
+                          } catch (e) {
+                            alert("Failed to liquidate positions: " + e.message);
+                          }
+                        }
+                      }} 
+                      className="btn-danger" 
+                      style={{ padding: '6px 12px', fontSize: '0.8rem', borderRadius: '6px' }}
+                    >
+                      Liquidate All
+                    </button>
+                  )}
+                </div>
                 {Object.keys(activeTrades).length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '15px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                     {Object.entries(activeTrades).map(([symbol, trade]) => {
                       const currentPriceForSymbol = symbol === selectedSymbol 
                         ? latestPrice 

@@ -171,6 +171,16 @@ async def reset_trades():
         "paper_balance": trader.paper_balance
     }
 
+@app.post("/trades/liquidate")
+async def liquidate_trades():
+    trader.liquidate_all_trades()
+    return {
+        "status": "success",
+        "active_trades": trader.active_trades,
+        "trade_history": trader.trade_history,
+        "paper_balance": trader.paper_balance
+    }
+
 @app.get("/chart")
 def get_chart(symbol: Optional[str] = None):
     target_symbol = symbol or trader.config.get("selected_symbol", trader.config.get("symbol", "BTCUSDT"))
