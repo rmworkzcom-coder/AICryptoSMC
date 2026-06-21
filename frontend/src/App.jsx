@@ -1,0 +1,1853 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { createChart, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
+import { 
+  Play, Square, Settings as SettingsIcon, Activity, History, 
+  BarChart3, RefreshCw, Key, ShieldAlert, Cpu, CheckCircle2, 
+  TrendingUp, TrendingDown, DollarSign, Percent, AlertCircle 
+} from 'lucide-react';
+
+const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
+const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
+
+// SMC Chart Component using Lightweight Charts
+function SMCChart({ data, structures, symbol, timeframe }) {
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || !data || data.length === 0) return;
+
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { color: '#0c0d13' },
+        textColor: '#9ca3af',
+      },
+      grid: {
+        vertLines: { color: 'rgba(255, 255, 255, 0.03)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.03)' },
+      },
+      rightPriceScale: {
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+      },
+      timeScale: {
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      width: containerRef.current.clientWidth,
+      height: 380,
+    });
+
+    chartRef.current = chart;
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderVisible: false,
+      wickUpColor: '#10b981',
+      wickDownColor: '#ef4444',
+    });
+
+    // Format historical data
+    const formattedData = data.map(d => ({
+      time: d.timestamp ? Math.floor(d.timestamp / 1000) : Math.floor(new Date(d.time).getTime() / 1000),
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    }));
+
+    // Remove duplicates
+    const uniqueData = [];
+    const seenTimes = new Set();
+    for (const d of formattedData) {
+      if (!seenTimes.has(d.time)) {
+        seenTimes.add(d.time);
+        uniqueData.push(d);
+      }
+    }
+    uniqueData.sort((a, b) => a.time - b.time);
+
+    candleSeries.setData(uniqueData);
+
+    // Add markers
+    const markers = [];
+    if (structures) {
+      if (structures.bos) {
+        structures.bos.forEach(b => {
+          markers.push({
+            time: Math.floor(b.time / 1000),
+            position: b.type === 'bullish' ? 'aboveBar' : 'belowBar',
+            color: b.type === 'bullish' ? '#10b981' : '#ef4444',
+            shape: 'arrowDown',
+            text: `BOS ${b.type === 'bullish' ? '▲' : '▼'}`,
+          });
+        });
+      }
+      if (structures.choch) {
+        structures.choch.forEach(c => {
+          markers.push({
+            time: Math.floor(c.time / 1000),
+            position: c.type === 'bullish' ? 'aboveBar' : 'belowBar',
+            color: '#a78bfa',
+            shape: 'arrowDown',
+            text: `CHoCH ${c.type === 'bullish' ? '▲' : '▼'}`,
+          });
+        });
+      }
+      if (structures.sweeps) {
+        structures.sweeps.forEach(s => {
+          markers.push({
+            time: Math.floor(s.time / 1000),
+            position: s.type === 'bullish_sweep' ? 'belowBar' : 'aboveBar',
+            color: '#14b8a6',
+            shape: s.type === 'bullish_sweep' ? 'arrowUp' : 'arrowDown',
+            text: 'SWEEP 🧹',
+          });
+        });
+      }
+    }
+
+    markers.sort((a, b) => a.time - b.time);
+    const validMarkers = markers.filter(m => seenTimes.has(m.time));
+    createSeriesMarkers(candleSeries, validMarkers);
+
+    chart.timeScale().fitContent();
+
+    const handleResize = () => {
+      if (containerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.remove();
+    };
+  }, [data, structures]);
+
+  return <div ref={containerRef} style={{ width: '100%', height: '380px' }} />;
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('live'); // 'live' | 'backtest'
+  
+  // Live Bot States
+  const [botRunning, setBotRunning] = useState(false);
+  const [botSymbol, setBotSymbol] = useState('BTCUSDT');
+  const [botTimeframe, setBotTimeframe] = useState('15m');
+  const [balance, setBalance] = useState(10000.0);
+  const [activeTrade, setActiveTrade] = useState(null);
+  const [activeTrades, setActiveTrades] = useState({});
+  const [scannedSymbolsStatus, setScannedSymbolsStatus] = useState({});
+  const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
+  const [tradeHistory, setTradeHistory] = useState([]);
+  const [latestPrice, setLatestPrice] = useState(0.0);
+  const [latestTrend, setLatestTrend] = useState('neutral');
+  const [logs, setLogs] = useState([]);
+  
+  // Configuration State
+  const [config, setConfig] = useState({
+    binance_api_key: '',
+    binance_api_secret: '',
+    testnet: true,
+    trading_mode: 'paper',
+    market_type: 'futures',
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    risk_pct: 1.0,
+    rr_ratio: 2.0,
+    n_swing: 2,
+    x_impulse: 2.0,
+    m_range: 5,
+    breakeven_trigger: 1.0
+  });
+
+  // Backtest States
+  const [backtestConfig, setBacktestConfig] = useState({
+    symbol: 'BTCUSDT',
+    timeframe: '15m',
+    initial_balance: 10000.0,
+    risk_pct: 1.0,
+    rr_ratio: 2.0,
+    n_swing: 2,
+    x_impulse: 2.0,
+    m_range: 5,
+    breakeven_trigger: 1.0,
+    limit: 500
+  });
+  const [backtestResults, setBacktestResults] = useState(null);
+  const [backtesting, setBacktesting] = useState(false);
+
+  // Live Chart States
+  const [liveChartData, setLiveChartData] = useState([]);
+  const [liveStructures, setLiveStructures] = useState(null);
+
+  // References
+  const wsRef = useRef(null);
+  const logsEndRef = useRef(null);
+  const consoleContainerRef = useRef(null);
+
+  // Connect WebSockets
+  useEffect(() => {
+    connectWebSocket();
+    fetchConfig();
+    fetchTrades();
+    fetchLogs();
+    fetchLiveChart(selectedSymbol);
+
+    // Auto-refresh chart every 15 seconds
+    const interval = setInterval(() => fetchLiveChart(selectedSymbol), 15000);
+
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      clearInterval(interval);
+    };
+  }, [selectedSymbol]);
+
+  const fetchLiveChart = async (symbolToFetch) => {
+    try {
+      const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
+      const res = await fetch(`http://${window.location.hostname}:8000/chart?symbol=${sym}`);
+      const data = await res.json();
+      setLiveChartData(data.chart_data);
+      setLiveStructures(data.structures);
+    } catch (e) {
+      console.error("Failed to load live chart", e);
+    }
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [logs]);
+
+  const connectWebSocket = () => {
+    const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws`);
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'state') {
+        const d = msg.data;
+        setBotRunning(d.running);
+        setBotSymbol(d.symbol);
+        setBotTimeframe(d.timeframe);
+        setBalance(d.balance);
+        setActiveTrade(d.active_trade);
+        setActiveTrades(d.active_trades || {});
+        setLatestPrice(d.latest_price);
+        setLatestTrend(d.latest_trend);
+        setScannedSymbolsStatus(d.scanned_symbols_status || {});
+        if (d.selected_symbol) {
+          setSelectedSymbol(d.selected_symbol);
+        }
+        if (d.trade_history) {
+          setTradeHistory(d.trade_history);
+        }
+      } else if (msg.type === 'log') {
+        setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
+      }
+    };
+
+    ws.onclose = () => {
+      // Auto-reconnect after 3 seconds
+      setTimeout(connectWebSocket, 3000);
+    };
+  };
+
+  const fetchConfig = async () => {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:8000/config`);
+      const data = await res.json();
+      setConfig(data);
+      // Sync backtest parameters with current settings as start
+      setBacktestConfig(prev => ({
+        ...prev,
+        symbol: data.symbol,
+        timeframe: data.timeframe,
+        risk_pct: data.risk_pct,
+        rr_ratio: data.rr_ratio,
+        n_swing: data.n_swing,
+        x_impulse: data.x_impulse,
+        m_range: data.m_range,
+        breakeven_trigger: data.breakeven_trigger
+      }));
+    } catch (e) {
+      console.error("Failed to load config", e);
+    }
+  };
+
+  const fetchTrades = async () => {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:8000/trades`);
+      const data = await res.json();
+      setActiveTrade(data.active_trade);
+      setActiveTrades(data.active_trades || {});
+      setTradeHistory(data.trade_history || []);
+      setBalance(data.paper_balance);
+    } catch (e) {
+      console.error("Failed to load trades", e);
+    }
+  };
+
+  const fetchLogs = async () => {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:8000/logs`);
+      const data = await res.json();
+      setLogs(data);
+    } catch (e) {
+      console.error("Failed to load logs", e);
+    }
+  };
+
+  const saveConfig = async (updatedConfig) => {
+    try {
+      const res = await fetch(`http://${window.location.hostname}:8000/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedConfig)
+      });
+      const data = await res.json();
+      setConfig(data);
+      if (data.selected_symbol) {
+        setSelectedSymbol(data.selected_symbol);
+      }
+      alert("Settings saved successfully!");
+    } catch (e) {
+      alert("Failed to save settings: " + e.message);
+    }
+  };
+
+  const startBot = async () => {
+    try {
+      await fetch(`http://${window.location.hostname}:8000/bot/start`, { method: 'POST' });
+      setBotRunning(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const stopBot = async () => {
+    try {
+      await fetch(`http://${window.location.hostname}:8000/bot/stop`, { method: 'POST' });
+      setBotRunning(false);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleSelectSymbol = async (symbol) => {
+    setSelectedSymbol(symbol);
+    try {
+      await fetch(`http://${window.location.hostname}:8000/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected_symbol: symbol })
+      });
+      fetchLiveChart(symbol);
+    } catch (e) {
+      console.error("Failed to update selected symbol config", e);
+    }
+  };
+
+  const runBacktestExecution = async () => {
+    setBacktesting(true);
+    setBacktestResults(null);
+    try {
+      const res = await fetch(`http://${window.location.hostname}:8000/backtest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backtestConfig)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBacktestResults(data);
+      } else {
+        const err = await res.json();
+        alert("Backtest failed: " + err.detail);
+      }
+    } catch (e) {
+      alert("Backtest error: " + e.message);
+    } finally {
+      setBacktesting(false);
+    }
+  };
+
+  const scrollToBottom = () => {
+    if (consoleContainerRef.current) {
+      consoleContainerRef.current.scrollTop = consoleContainerRef.current.scrollHeight;
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+      {/* Header bar */}
+      <header style={styles.header}>
+        <div style={styles.brand}>
+          <Cpu size={24} style={{ color: 'var(--accent-purple)' }} />
+          <h1 style={styles.title}>AICrypto<span style={{ color: 'var(--accent-purple)' }}>SMC</span></h1>
+          <span style={styles.tagline}>Smart Money Concepts Automated Trading</span>
+        </div>
+        
+        <div style={styles.nav}>
+          <button 
+            style={{ ...styles.navBtn, ...(activeTab === 'live' ? styles.navActive : {}) }}
+            onClick={() => { setActiveTab('live'); fetchTrades(); }}
+          >
+            <Activity size={16} /> Live Dashboard
+          </button>
+          <button 
+            style={{ ...styles.navBtn, ...(activeTab === 'history' ? styles.navActive : {}) }}
+            onClick={() => { setActiveTab('history'); fetchTrades(); }}
+          >
+            <History size={16} /> Trading History
+          </button>
+          <button 
+            style={{ ...styles.navBtn, ...(activeTab === 'backtest' ? styles.navActive : {}) }}
+            onClick={() => setActiveTab('backtest')}
+          >
+            <BarChart3 size={16} /> Historical Backtester
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main style={styles.mainContent}>
+        {activeTab === 'live' ? (
+          /* LIVE TRADING TAB */
+          <div style={styles.dashboardGrid}>
+            
+            {/* Column 1: Scanned Coins Sidebar */}
+            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                <Cpu size={18} style={{ color: 'var(--accent-purple)' }} />
+                <h3 style={styles.cardTitle}>Scanned Markets</h3>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {Object.keys(scannedSymbolsStatus).length > 0 ? (
+                  Object.entries(scannedSymbolsStatus).map(([sym, status]) => {
+                    const isSelected = sym === selectedSymbol;
+                    const trendColor = status.trend === 'uptrend' ? 'var(--bullish)' : status.trend === 'downtrend' ? 'var(--bearish)' : 'var(--text-muted)';
+                    return (
+                      <div 
+                        key={sym} 
+                        onClick={() => handleSelectSymbol(sym)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '10px 12px',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          border: isSelected ? '1px solid var(--accent-purple)' : '1px solid transparent',
+                          background: isSelected ? 'rgba(168, 85, 247, 0.08)' : 'rgba(255, 255, 255, 0.02)',
+                          transition: 'all 0.2s',
+                        }}
+                        className="coin-row-hover"
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontWeight: '700', fontSize: '0.85rem', color: isSelected ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                              {sym.replace('USDT', '')}
+                            </span>
+                            {status.has_active_trade && (
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-teal)', boxShadow: '0 0 6px var(--accent-teal)' }} />
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.7rem', color: trendColor, textTransform: 'uppercase', fontWeight: '600' }}>
+                            {status.trend}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-main)' }}>
+                          ${status.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                        </span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div style={{ textAlign: 'center', color: 'var(--text-dark)', fontSize: '0.8rem', padding: '20px 0' }}>
+                    No scanned markets active. Start the bot.
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Column 2: Status & Config */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              
+              {/* Bot Control Card */}
+              <div className="glass-card" style={botRunning ? { ...styles.controlCard, ...styles.activeGlow } : styles.controlCard}>
+                <div style={styles.cardHeader}>
+                  <h3>Trading Bot Controller</h3>
+                  <span style={{ 
+                    ...styles.statusDot, 
+                    backgroundColor: botRunning ? 'var(--bullish)' : 'var(--text-dark)',
+                    boxShadow: botRunning ? '0 0 10px var(--bullish)' : 'none'
+                  }} />
+                </div>
+
+                <div style={styles.statusRow}>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Pair</span>
+                    <span style={styles.statusValue}>{selectedSymbol}</span>
+                  </div>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Timeframe</span>
+                    <span style={styles.statusValue}>{botTimeframe}</span>
+                  </div>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>SMC Bias</span>
+                    <span style={{ 
+                      ...styles.statusValue, 
+                      color: latestTrend === 'uptrend' ? 'var(--bullish)' : latestTrend === 'downtrend' ? 'var(--bearish)' : 'var(--text-muted)' 
+                    }}>
+                      {(latestTrend || 'neutral').toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={styles.statusRow}>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Latest Price</span>
+                    <span style={styles.statusValue}>${latestPrice ? latestPrice.toLocaleString() : '---'}</span>
+                  </div>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Paper Balance</span>
+                    <span style={{ ...styles.statusValue, color: 'var(--accent-teal)' }}>
+                      ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={styles.actionButtons}>
+                  {!botRunning ? (
+                    <button onClick={startBot} className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
+                      <Play size={18} fill="white" /> Start Monitoring & Trade
+                    </button>
+                  ) : (
+                    <button onClick={stopBot} className="btn-danger" style={{ width: '100%', justifyContent: 'center' }}>
+                      <Square size={18} fill="var(--bearish)" /> Stop Trading Loop
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Active Position Card */}
+              <div className="glass-card">
+                <h3 style={styles.cardTitle}>Active SMC Positions</h3>
+                {Object.keys(activeTrades).length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '15px' }}>
+                    {Object.entries(activeTrades).map(([symbol, trade]) => {
+                      const currentPriceForSymbol = symbol === selectedSymbol 
+                        ? latestPrice 
+                        : (scannedSymbolsStatus[symbol]?.price || trade.entry_price);
+                      
+                      const pnl = trade.type === 'long' 
+                        ? (currentPriceForSymbol - trade.entry_price) * trade.size
+                        : (trade.entry_price - currentPriceForSymbol) * trade.size;
+                      const pnlPct = (pnl / (trade.entry_price * trade.size)) * 100;
+                      
+                      return (
+                        <div key={symbol} style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(255, 255, 255, 0.02)' }}>
+                          <div style={styles.positionHeader}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontWeight: 'bold', color: 'var(--text-main)' }}>{symbol}</span>
+                              <span className={`badge ${trade.type === 'long' ? 'badge-bullish' : 'badge-bearish'}`}>
+                                {trade.type.toUpperCase()}
+                              </span>
+                            </div>
+                            <span style={styles.entryTime}>
+                              {new Date(trade.entry_time).toLocaleTimeString()}
+                            </span>
+                          </div>
+
+                          <div style={{ ...styles.metricGrid, marginTop: '10px' }}>
+                            <div>
+                              <span style={styles.metricLabel}>Entry</span>
+                              <span style={styles.metricValue}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>Current</span>
+                              <span style={styles.metricValue}>${currentPriceForSymbol.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>SL</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bearish)' }}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>TP</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            </div>
+                          </div>
+
+                          <div style={{
+                            ...styles.floatingPnl,
+                            marginTop: '10px',
+                            background: pnl >= 0 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                            borderColor: pnl >= 0 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                          }}>
+                            <span style={styles.pnlLabel}>Unrealized PnL</span>
+                            <span style={{
+                              ...styles.pnlValue,
+                              color: pnl >= 0 ? 'var(--bullish)' : 'var(--bearish)'
+                            }}>
+                              {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={styles.emptyState}>
+                    <AlertCircle size={24} style={{ color: 'var(--text-dark)' }} />
+                    <p style={{ color: 'var(--text-muted)' }}>No active trades currently. Waiting for SMC zone sweeps...</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Completed SMC Trades Card */}
+              <div className="glass-card">
+                <h3 style={styles.cardTitle}>Completed SMC Trades</h3>
+                {tradeHistory && tradeHistory.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '15px', maxHeight: '300px', overflowY: 'auto', paddingRight: '5px' }}>
+                    {[...tradeHistory].reverse().map((trade, idx) => {
+                      const isProfit = trade.pnl > 0;
+                      const isLoss = trade.pnl < 0;
+                      const badgeClass = trade.status === 'TP' ? 'badge-bullish' : trade.status === 'SL' ? 'badge-bearish' : 'badge-neutral';
+                      
+                      return (
+                        <div key={idx} style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '10px', background: 'rgba(255, 255, 255, 0.01)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div style={styles.positionHeader}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontWeight: 'bold', color: 'var(--text-main)', fontSize: '0.9rem' }}>{trade.symbol}</span>
+                              <span className={`badge ${trade.type === 'long' ? 'badge-bullish' : 'badge-bearish'}`} style={{ fontSize: '0.65rem', padding: '2px 6px' }}>
+                                {trade.type.toUpperCase()}
+                              </span>
+                              <span className={`badge ${badgeClass}`} style={{ fontSize: '0.65rem', padding: '2px 6px' }}>
+                                {trade.status}
+                              </span>
+                            </div>
+                            <span style={{ ...styles.entryTime, fontSize: '0.75rem' }}>
+                              {new Date(trade.exit_time).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            <span>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            <span>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            <span style={{ fontWeight: 'bold', color: isProfit ? 'var(--bullish)' : isLoss ? 'var(--bearish)' : 'var(--text-muted)' }}>
+                              {trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={styles.emptyState}>
+                    <AlertCircle size={24} style={{ color: 'var(--text-dark)' }} />
+                    <p style={{ color: 'var(--text-muted)' }}>No completed trades yet.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Bot Settings */}
+              <SettingsPanel config={config} saveConfig={saveConfig} />
+
+            </div>
+
+            {/* Column 3: Chart & Logs */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              
+              {/* Chart Display */}
+              <div className="glass-card" style={{ flexGrow: 1, minHeight: '400px', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                  <h3 style={styles.cardTitle}>Live Price Chart</h3>
+                  <div style={{ display: 'flex', gap: '8px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    <span>⚡ Real-time Updates</span>
+                  </div>
+                </div>
+                
+                {/* Visualizer component */}
+                <div style={{ flexGrow: 1, position: 'relative', minHeight: '380px' }}>
+                  {liveChartData && liveChartData.length > 0 ? (
+                    <SMCChart 
+                      data={liveChartData} 
+                      structures={liveStructures} 
+                      symbol={selectedSymbol} 
+                      timeframe={botTimeframe} 
+                    />
+                  ) : (
+                    <div style={styles.chartFallback}>
+                      <RefreshCw size={24} style={{ animation: 'spin 2s linear infinite', color: 'var(--accent-purple)' }} />
+                      <p style={{ marginTop: '10px' }}>Loading chart data...</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Real-time Logs Console */}
+              <div className="glass-card" style={styles.consoleCard}>
+                <div style={styles.consoleHeader}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Activity size={16} style={{ color: 'var(--accent-purple)' }} />
+                    <h3 style={styles.cardTitle}>Live Monitoring Logs</h3>
+                  </div>
+                  <button onClick={fetchLogs} style={styles.refreshBtn}><RefreshCw size={12} /></button>
+                </div>
+                
+                <div ref={consoleContainerRef} style={styles.consoleContent}>
+                  {logs.map((log, idx) => (
+                    <div key={idx} style={styles.logRow}>
+                      <span style={styles.logTime}>
+                        {log.time 
+                          ? (typeof log.time === 'string' && log.time.includes(" ") 
+                             ? log.time.split(" ")[1] 
+                             : new Date(log.time).toLocaleTimeString()) 
+                          : ''}
+                      </span>
+                      <span style={{ 
+                        ...styles.logLevel, 
+                        color: log.level === 'ERROR' ? 'var(--bearish)' : log.level === 'WARNING' ? 'var(--accent-purple)' : 'var(--accent-teal)'
+                      }}>[{log.level}]</span>
+                      <span style={styles.logMsg}>{log.message}</span>
+                    </div>
+                  ))}
+                  <div ref={logsEndRef} />
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        ) : activeTab === 'history' ? (
+          /* TRADING HISTORY TAB */
+          <TradingHistoryView 
+            tradeHistory={tradeHistory} 
+            balance={balance}
+            onResetHistory={async () => {
+              if (window.confirm("Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $10,000.0.")) {
+                try {
+                  const res = await fetch(`http://${window.location.hostname}:8000/trades/reset`, { method: 'POST' });
+                  const data = await res.json();
+                  setTradeHistory(data.trade_history || []);
+                  setBalance(data.paper_balance || 10000.0);
+                  alert("Session history and balance reset successfully.");
+                } catch (e) {
+                  alert("Failed to reset history: " + e.message);
+                }
+              }
+            }}
+          />
+        ) : (
+          /* HISTORICAL BACKTEST TAB */
+          <div style={styles.backtestContainer}>
+            
+            {/* Configurations & Actions */}
+            <div className="glass-card" style={styles.backtestConfigCard}>
+              <h3 style={{ ...styles.cardTitle, marginBottom: '20px' }}>Backtest Parameters</h3>
+              
+              <div style={styles.backtestFormGrid}>
+                <div className="form-group">
+                  <label>Asset Symbol</label>
+                  <select 
+                    value={backtestConfig.symbol} 
+                    className="form-select"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, symbol: e.target.value }))}
+                  >
+                    {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Candle Timeframe</label>
+                  <select 
+                    value={backtestConfig.timeframe} 
+                    className="form-select"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, timeframe: e.target.value }))}
+                  >
+                    {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Historical Candles Count</label>
+                  <input 
+                    type="number" 
+                    value={backtestConfig.limit} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, limit: parseInt(e.target.value) || 200 }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Starting Balance (USD)</label>
+                  <input 
+                    type="number" 
+                    value={backtestConfig.initial_balance} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, initial_balance: parseFloat(e.target.value) || 10000 }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Risk Per Trade (%)</label>
+                  <input 
+                    type="number" 
+                    step="0.1" 
+                    value={backtestConfig.risk_pct} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, risk_pct: parseFloat(e.target.value) || 1 }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Risk Reward Ratio (R)</label>
+                  <input 
+                    type="number" 
+                    step="0.5" 
+                    value={backtestConfig.rr_ratio} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, rr_ratio: parseFloat(e.target.value) || 2 }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Swing Lookback (N)</label>
+                  <input 
+                    type="number" 
+                    value={backtestConfig.n_swing} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, n_swing: parseInt(e.target.value) || 2 }))}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Impulse Multiplier (X)</label>
+                  <input 
+                    type="number" 
+                    step="0.1" 
+                    value={backtestConfig.x_impulse} 
+                    className="form-input"
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, x_impulse: parseFloat(e.target.value) || 2.0 }))}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '20px' }}>
+                <button 
+                  onClick={runBacktestExecution} 
+                  className="btn-primary" 
+                  disabled={backtesting}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  {backtesting ? (
+                    <>
+                      <RefreshCw size={18} style={{ animation: 'spin 2s linear infinite' }} /> Processing Backtest Simulation...
+                    </>
+                  ) : (
+                    <>
+                      <BarChart3 size={18} /> Run Backtest Simulation
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Backtest Results Display */}
+            {backtestResults && (
+              <div style={styles.backtestResultsArea}>
+                
+                {/* Stats Summary Cards */}
+                <div style={styles.statsSummaryGrid}>
+                  
+                  <div className="glass-card" style={styles.statCard}>
+                    <TrendingUp size={24} style={{ color: 'var(--accent-purple)' }} />
+                    <div>
+                      <span style={styles.statLabel}>Net Profit</span>
+                      <h4 style={{ 
+                        ...styles.statVal, 
+                        color: backtestResults.summary.net_profit >= 0 ? 'var(--bullish)' : 'var(--bearish)'
+                      }}>
+                        {backtestResults.summary.net_profit >= 0 ? '+' : ''}
+                        ${backtestResults.summary.net_profit.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                        <span style={styles.smallPct}> ({backtestResults.summary.return_pct.toFixed(2)}%)</span>
+                      </h4>
+                    </div>
+                  </div>
+
+                  <div className="glass-card" style={styles.statCard}>
+                    <Activity size={24} style={{ color: 'var(--accent-teal)' }} />
+                    <div>
+                      <span style={styles.statLabel}>Total Trades</span>
+                      <h4 style={styles.statVal}>{backtestResults.summary.total_trades}</h4>
+                    </div>
+                  </div>
+
+                  <div className="glass-card" style={styles.statCard}>
+                    <CheckCircle2 size={24} style={{ color: 'var(--bullish)' }} />
+                    <div>
+                      <span style={styles.statLabel}>Win Rate</span>
+                      <h4 style={styles.statVal}>{backtestResults.summary.win_rate.toFixed(1)}%</h4>
+                    </div>
+                  </div>
+
+                  <div className="glass-card" style={styles.statCard}>
+                    <DollarSign size={24} style={{ color: 'var(--accent-blue)' }} />
+                    <div>
+                      <span style={styles.statLabel}>Profit Factor</span>
+                      <h4 style={styles.statVal}>{backtestResults.summary.profit_factor.toFixed(2)}</h4>
+                    </div>
+                  </div>
+
+                 </div>
+
+                {/* Backtest Chart Display */}
+                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '20px', marginBottom: '20px' }}>
+                  <h3 style={styles.cardTitle}>SMC Backtest Visualizer ({backtestConfig.symbol} - {backtestConfig.timeframe})</h3>
+                  <div style={{ position: 'relative', minHeight: '380px' }}>
+                    {backtestResults.chart_data && backtestResults.chart_data.length > 0 ? (
+                      <SMCChart 
+                        data={backtestResults.chart_data} 
+                        structures={backtestResults.structures} 
+                        symbol={backtestConfig.symbol} 
+                        timeframe={backtestConfig.timeframe} 
+                      />
+                    ) : (
+                      <div style={styles.chartFallback}>No chart data returned from backtest.</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Backtest Trades Table */}
+                <div className="glass-card">
+                  <h3 style={{ ...styles.cardTitle, marginBottom: '15px' }}>Trades Executed</h3>
+                  {backtestResults.trades.length > 0 ? (
+                    <div style={styles.tableWrapper}>
+                      <table style={styles.table}>
+                        <thead>
+                          <tr style={styles.tr}>
+                            <th style={styles.th}>Type</th>
+                            <th style={styles.th}>Entry Price</th>
+                            <th style={styles.th}>Exit Price</th>
+                            <th style={styles.th}>Stop Loss</th>
+                            <th style={styles.th}>Take Profit</th>
+                            <th style={styles.th}>Net PnL</th>
+                            <th style={styles.th}>Result</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backtestResults.trades.map((trade, idx) => (
+                            <tr key={idx} style={styles.tr}>
+                              <td style={styles.td}>
+                                <span className={`badge ${trade.type === 'long' ? 'badge-bullish' : 'badge-bearish'}`}>
+                                  {trade.type.toUpperCase()}
+                                </span>
+                              </td>
+                              <td style={styles.td}>${trade.entry_price.toLocaleString()}</td>
+                              <td style={styles.td}>${trade.exit_price.toLocaleString()}</td>
+                              <td style={styles.td}>${trade.sl.toLocaleString()}</td>
+                              <td style={styles.td}>${trade.tp.toLocaleString()}</td>
+                              <td style={{ 
+                                ...styles.td, 
+                                color: trade.pnl >= 0 ? 'var(--bullish)' : 'var(--bearish)',
+                                fontWeight: '600'
+                              }}>
+                                {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                              </td>
+                              <td style={styles.td}>
+                                <span style={{
+                                  color: trade.status === 'TP' ? 'var(--bullish)' : trade.status === 'SL' ? 'var(--bearish)' : 'var(--text-muted)'
+                                }}>{trade.status}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={styles.emptyState}>
+                      <AlertCircle size={24} style={{ color: 'var(--text-dark)' }} />
+                      <p>No trades executed in this backtesting timeframe. Try adjusting your timeframe or parameters.</p>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function formatDuration(entryTime, exitTime) {
+  if (!entryTime || !exitTime) return '---';
+  const diffMs = exitTime - entryTime;
+  if (diffMs <= 0) return '0s';
+  const diffSec = Math.floor(diffMs / 1000);
+  const hrs = Math.floor(diffSec / 3600);
+  const mins = Math.floor((diffSec % 3600) / 60);
+  const secs = diffSec % 60;
+  
+  if (hrs > 0) {
+    return `${hrs}h ${mins}m`;
+  }
+  if (mins > 0) {
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '---';
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
+  const [symbolFilter, setSymbolFilter] = useState('ALL');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'oldest' | 'pnl_desc' | 'pnl_asc'
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Extract unique symbols from history
+  const uniqueSymbols = ['ALL', ...new Set(tradeHistory.map(t => t.symbol))];
+
+  // Calculate statistics
+  const totalTrades = tradeHistory.length;
+  const wins = tradeHistory.filter(t => t.pnl > 0).length;
+  const losses = tradeHistory.filter(t => t.pnl < 0).length;
+  const breakEvens = tradeHistory.filter(t => t.pnl === 0).length;
+  
+  const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+  
+  const grossProfits = tradeHistory.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0);
+  const grossLosses = tradeHistory.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0);
+  const netPnL = tradeHistory.reduce((sum, t) => sum + t.pnl, 0);
+  const avgPnL = totalTrades > 0 ? netPnL / totalTrades : 0;
+  
+  const profitFactor = Math.abs(grossLosses) > 0 ? grossProfits / Math.abs(grossLosses) : grossProfits;
+  
+  const maxWin = tradeHistory.length > 0 ? Math.max(...tradeHistory.map(t => t.pnl)) : 0;
+  const maxLoss = tradeHistory.length > 0 ? Math.min(...tradeHistory.map(t => t.pnl)) : 0;
+
+  // Filter trade history
+  const filteredTrades = tradeHistory.filter(trade => {
+    if (symbolFilter !== 'ALL' && trade.symbol !== symbolFilter) return false;
+    if (typeFilter !== 'ALL' && trade.type !== typeFilter) return false;
+    if (statusFilter !== 'ALL' && trade.status !== statusFilter) return false;
+    return true;
+  });
+
+  // Sort trade history
+  const sortedTrades = [...filteredTrades].sort((a, b) => {
+    if (sortBy === 'newest') {
+      return (b.exit_time || 0) - (a.exit_time || 0);
+    }
+    if (sortBy === 'oldest') {
+      return (a.exit_time || 0) - (b.exit_time || 0);
+    }
+    if (sortBy === 'pnl_desc') {
+      return b.pnl - a.pnl;
+    }
+    if (sortBy === 'pnl_asc') {
+      return a.pnl - b.pnl;
+    }
+    return 0;
+  });
+
+  // Paginated trades
+  const totalPages = Math.ceil(sortedTrades.length / itemsPerPage);
+  const paginatedTrades = sortedTrades.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  // Reset page when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [symbolFilter, typeFilter, statusFilter, sortBy]);
+
+  // Styling helper for Profit Factor
+  let pfColor = 'var(--text-muted)';
+  let pfLabel = 'Neutral';
+  if (totalTrades > 0) {
+    if (profitFactor >= 1.5) {
+      pfColor = 'var(--accent-teal)';
+      pfLabel = 'Excellent';
+    } else if (profitFactor >= 1.0) {
+      pfColor = 'var(--accent-blue)';
+      pfLabel = 'Good';
+    } else if (profitFactor > 0) {
+      pfColor = 'var(--bearish)';
+      pfLabel = 'Unprofitable';
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      
+      {/* 1. Header with Title & Reset Button */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--text-main)' }}>Trade Performance Analyzer</h2>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Analyze and track all automated SMC trades completed in this session.</p>
+        </div>
+        <button onClick={onResetHistory} className="btn-danger">
+          <History size={16} /> Reset Session Data
+        </button>
+      </div>
+
+      {/* 2. Stats Grid */}
+      <div style={styles.statsSummaryGrid}>
+        
+        {/* Net Profit Card */}
+        <div className="glass-card" style={styles.statCard}>
+          <TrendingUp size={28} style={{ color: netPnL >= 0 ? 'var(--bullish)' : 'var(--bearish)' }} />
+          <div style={{ flexGrow: 1 }}>
+            <span style={styles.statLabel}>Net Profit/Loss</span>
+            <h4 style={{ 
+              ...styles.statVal, 
+              color: netPnL >= 0 ? 'var(--bullish)' : 'var(--bearish)'
+            }}>
+              {netPnL >= 0 ? '+' : ''}${netPnL.toFixed(2)}
+            </h4>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Session Balance: <strong style={{ color: 'var(--text-main)' }}>${balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
+            </span>
+          </div>
+        </div>
+
+        {/* Win Rate Card */}
+        <div className="glass-card" style={styles.statCard}>
+          <CheckCircle2 size={28} style={{ color: 'var(--accent-purple)' }} />
+          <div style={{ flexGrow: 1 }}>
+            <span style={styles.statLabel}>Win Rate</span>
+            <h4 style={styles.statVal}>{winRate.toFixed(1)}%</h4>
+            
+            {/* Visual Win Rate progress bar */}
+            <div style={{ width: '100%', height: '6px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '3px', marginTop: '6px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${winRate}%`, backgroundColor: 'var(--accent-purple)', borderRadius: '3px', transition: 'width 0.5s ease-out' }} />
+            </div>
+          </div>
+        </div>
+
+        {/* Profit Factor Card */}
+        <div className="glass-card" style={styles.statCard}>
+          <DollarSign size={28} style={{ color: pfColor }} />
+          <div style={{ flexGrow: 1 }}>
+            <span style={styles.statLabel}>Profit Factor</span>
+            <h4 style={{ ...styles.statVal, color: pfColor }}>
+              {totalTrades > 0 && Math.abs(grossLosses) === 0 ? '∞' : profitFactor.toFixed(2)}
+            </h4>
+            <span style={{ fontSize: '0.75rem', color: pfColor, fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {pfLabel}
+            </span>
+          </div>
+        </div>
+
+        {/* Trade Count Summary Card */}
+        <div className="glass-card" style={styles.statCard}>
+          <Activity size={28} style={{ color: 'var(--accent-blue)' }} />
+          <div style={{ flexGrow: 1 }}>
+            <span style={styles.statLabel}>Total Trades</span>
+            <h4 style={styles.statVal}>{totalTrades}</h4>
+            <div style={{ display: 'flex', gap: '8px', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+              <span>W: <strong style={{ color: 'var(--bullish)' }}>{wins}</strong></span>
+              <span>L: <strong style={{ color: 'var(--bearish)' }}>{losses}</strong></span>
+              <span>BE: <strong style={{ color: 'var(--text-muted)' }}>{breakEvens}</strong></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      {/* 3. Detailed Stats Drawer (Averages & Extremes) */}
+      <div className="glass-card" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '20px', padding: '16px 24px' }}>
+        <div>
+          <span style={{ ...styles.statLabel, fontSize: '0.7rem' }}>Avg. Trade PnL</span>
+          <span style={{ fontSize: '1rem', fontWeight: '700', color: avgPnL >= 0 ? 'var(--bullish)' : 'var(--bearish)' }}>
+            {avgPnL >= 0 ? '+' : ''}${avgPnL.toFixed(2)}
+          </span>
+        </div>
+        <div>
+          <span style={{ ...styles.statLabel, fontSize: '0.7rem' }}>Largest Win</span>
+          <span style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--bullish)' }}>
+            {maxWin > 0 ? `+$${maxWin.toFixed(2)}` : '$0.00'}
+          </span>
+        </div>
+        <div>
+          <span style={{ ...styles.statLabel, fontSize: '0.7rem' }}>Largest Loss</span>
+          <span style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--bearish)' }}>
+            {maxLoss < 0 ? `-$${Math.abs(maxLoss).toFixed(2)}` : '$0.00'}
+          </span>
+        </div>
+        <div>
+          <span style={{ ...styles.statLabel, fontSize: '0.7rem' }}>Gross Profits</span>
+          <span style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--bullish)' }}>
+            +${grossProfits.toFixed(2)}
+          </span>
+        </div>
+        <div>
+          <span style={{ ...styles.statLabel, fontSize: '0.7rem' }}>Gross Losses</span>
+          <span style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--bearish)' }}>
+            -${Math.abs(grossLosses).toFixed(2)}
+          </span>
+        </div>
+      </div>
+
+      {/* 4. Filter Panel & Table Card */}
+      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        
+        {/* Interactive Filters Bar */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '15px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+            
+            {/* Filter Symbol */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Symbol:</span>
+              <select 
+                value={symbolFilter} 
+                className="form-select"
+                style={{ width: '120px', padding: '6px 28px 6px 12px', fontSize: '0.8rem' }}
+                onChange={e => setSymbolFilter(e.target.value)}
+              >
+                {uniqueSymbols.map(s => <option key={s} value={s}>{s === 'ALL' ? 'All Symbols' : s.replace('USDT','')}</option>)}
+              </select>
+            </div>
+
+            {/* Filter Type */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Type:</span>
+              <select 
+                value={typeFilter} 
+                className="form-select"
+                style={{ width: '100px', padding: '6px 28px 6px 12px', fontSize: '0.8rem' }}
+                onChange={e => setTypeFilter(e.target.value)}
+              >
+                <option value="ALL">All Types</option>
+                <option value="long">Longs</option>
+                <option value="short">Shorts</option>
+              </select>
+            </div>
+
+            {/* Filter Status */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Outcome:</span>
+              <select 
+                value={statusFilter} 
+                className="form-select"
+                style={{ width: '100px', padding: '6px 28px 6px 12px', fontSize: '0.8rem' }}
+                onChange={e => setStatusFilter(e.target.value)}
+              >
+                <option value="ALL">All Status</option>
+                <option value="TP">TP (Target)</option>
+                <option value="SL">SL (Stop)</option>
+                <option value="BE">BE (Breakeven)</option>
+              </select>
+            </div>
+
+          </div>
+
+          {/* Sort Control */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: '500' }}>Sort By:</span>
+            <select 
+              value={sortBy} 
+              className="form-select"
+              style={{ width: '150px', padding: '6px 28px 6px 12px', fontSize: '0.8rem' }}
+              onChange={e => setSortBy(e.target.value)}
+            >
+              <option value="newest">Newest Exits</option>
+              <option value="oldest">Oldest Exits</option>
+              <option value="pnl_desc">PnL (High to Low)</option>
+              <option value="pnl_asc">PnL (Low to High)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Datatable */}
+        {paginatedTrades.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            <div style={styles.tableWrapper}>
+              <table style={styles.table}>
+                <thead>
+                  <tr style={styles.tr}>
+                    <th style={styles.th}>Asset</th>
+                    <th style={styles.th}>Type</th>
+                    <th style={styles.th}>Entry / Exit Time</th>
+                    <th style={styles.th}>Duration</th>
+                    <th style={styles.th}>Prices (Entry / Exit)</th>
+                    <th style={styles.th}>Size / Risk</th>
+                    <th style={styles.th}>Result</th>
+                    <th style={styles.th}>Realized PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedTrades.map((trade, idx) => {
+                    const isProfit = trade.pnl > 0;
+                    const isLoss = trade.pnl < 0;
+                    const badgeClass = trade.status === 'TP' ? 'badge-bullish' : trade.status === 'SL' ? 'badge-bearish' : 'badge-neutral';
+                    
+                    return (
+                      <tr key={idx} style={styles.tr} className="coin-row-hover">
+                        <td style={{ ...styles.td, fontWeight: '700' }}>
+                          {trade.symbol}
+                        </td>
+                        <td style={styles.td}>
+                          <span className={`badge ${trade.type === 'long' ? 'badge-bullish' : 'badge-bearish'}`} style={{ fontSize: '0.65rem', padding: '2px 8px' }}>
+                            {trade.type.toUpperCase()}
+                          </span>
+                        </td>
+                        <td style={{ ...styles.td, fontSize: '0.8rem' }}>
+                          <div>Entry: {formatTimestamp(trade.entry_time)}</div>
+                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: {formatTimestamp(trade.exit_time)}</div>
+                        </td>
+                        <td style={styles.td}>
+                          {formatDuration(trade.entry_time, trade.exit_time)}
+                        </td>
+                        <td style={{ ...styles.td, fontSize: '0.85rem' }}>
+                          <div>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</div>
+                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</div>
+                        </td>
+                        <td style={{ ...styles.td, fontSize: '0.85rem' }}>
+                          <div>Size: {trade.size.toLocaleString(undefined, {maximumFractionDigits: 6})}</div>
+                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Risk: ${trade.risk_amount.toFixed(2)}</div>
+                        </td>
+                        <td style={styles.td}>
+                          <span className={`badge ${badgeClass}`} style={{ fontSize: '0.65rem', padding: '2px 8px' }}>
+                            {trade.status}
+                          </span>
+                        </td>
+                        <td style={{ 
+                          ...styles.td, 
+                          color: isProfit ? 'var(--bullish)' : isLoss ? 'var(--bearish)' : 'var(--text-muted)',
+                          fontWeight: '800',
+                          fontSize: '0.95rem'
+                        }}>
+                          {trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, sortedTrades.length)} of {sortedTrades.length} trades
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+                  >
+                    Previous
+                  </button>
+                  <span style={{ display: 'flex', alignItems: 'center', fontSize: '0.8rem', fontWeight: '600', padding: '0 8px' }}>
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button 
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    disabled={currentPage === totalPages}
+                    className="btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.8rem', opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={styles.emptyState}>
+            <AlertCircle size={32} style={{ color: 'var(--text-dark)' }} />
+            <h4 style={{ color: 'var(--text-main)', marginTop: '8px' }}>No Trades Found</h4>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No completed trades match the selected filter criteria.</p>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({ config, saveConfig }) {
+  const [localConfig, setLocalConfig] = useState({ ...config });
+
+  useEffect(() => {
+    setLocalConfig({ ...config });
+  }, [config]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    saveConfig(localConfig);
+  };
+
+  return (
+    <div className="glass-card">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+        <SettingsIcon size={18} style={{ color: 'var(--accent-purple)' }} />
+        <h3 style={styles.cardTitle}>Configuration Settings</h3>
+      </div>
+      
+      <form onSubmit={handleSubmit}>
+        <div style={styles.formSectionTitle}>
+          <Key size={14} /> Binance API Credentials
+        </div>
+        
+        <div className="form-group">
+          <label>Binance API Key</label>
+          <input 
+            type="password" 
+            value={localConfig.binance_api_key} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, binance_api_key: e.target.value }))}
+            placeholder="Binance API Key (optional for paper)"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Binance Secret Key</label>
+          <input 
+            type="password" 
+            value={localConfig.binance_api_secret} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, binance_api_secret: e.target.value }))}
+            placeholder="Binance Secret Key (optional for paper)"
+          />
+        </div>
+
+        <div className="form-group" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <label style={{ margin: 0 }}>Use Binance Testnet</label>
+          <label className="switch">
+            <input 
+              type="checkbox" 
+              checked={localConfig.testnet}
+              onChange={e => setLocalConfig(prev => ({ ...prev, testnet: e.target.checked }))}
+            />
+            <span className="slider"></span>
+          </label>
+        </div>
+
+        <div style={{ ...styles.formSectionTitle, marginTop: '20px' }}>
+          <Activity size={14} /> Bot Parameters
+        </div>
+
+        <div className="form-group">
+          <label>Trading Mode</label>
+          <select 
+            value={localConfig.trading_mode} 
+            className="form-select"
+            onChange={e => setLocalConfig(prev => ({ ...prev, trading_mode: e.target.value }))}
+          >
+            <option value="paper">Paper (Simulation)</option>
+            <option value="live">Live (Binance API Orders)</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Market Type</label>
+          <select 
+            value={localConfig.market_type} 
+            className="form-select"
+            onChange={e => setLocalConfig(prev => ({ ...prev, market_type: e.target.value }))}
+          >
+            <option value="futures">USDⓈ-M Futures (Supports Shorts)</option>
+            <option value="spot">Spot (Long-only)</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Monitored Symbol</label>
+          <select 
+            value={localConfig.symbol} 
+            className="form-select"
+            onChange={e => setLocalConfig(prev => ({ ...prev, symbol: e.target.value }))}
+          >
+            {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Candle Timeframe</label>
+          <select 
+            value={localConfig.timeframe} 
+            className="form-select"
+            onChange={e => setLocalConfig(prev => ({ ...prev, timeframe: e.target.value }))}
+          >
+            {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>Risk Per Trade (%)</label>
+          <input 
+            type="number" 
+            step="0.1"
+            value={localConfig.risk_pct} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, risk_pct: parseFloat(e.target.value) || 1.0 }))}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Risk Reward Ratio (R)</label>
+          <input 
+            type="number" 
+            step="0.5"
+            value={localConfig.rr_ratio} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, rr_ratio: parseFloat(e.target.value) || 2.0 }))}
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Max Concurrent Trades</label>
+          <input 
+            type="number" 
+            step="1"
+            value={localConfig.max_active_trades || 5} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, max_active_trades: parseInt(e.target.value) || 5 }))}
+          />
+        </div>
+
+        <div style={{ marginTop: '20px' }}>
+          <button type="submit" className="btn-secondary" style={{ width: '100%', justifyContent: 'center' }}>
+            Save Configuration
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+const styles = {
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '20px 40px',
+    borderBottom: '1px solid var(--border-color)',
+    background: 'rgba(10, 11, 16, 0.5)',
+    backdropFilter: 'blur(10px)',
+  },
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  title: {
+    fontSize: '1.4rem',
+    fontWeight: '800',
+    letterSpacing: '-0.02em',
+    color: 'var(--text-main)',
+  },
+  tagline: {
+    fontSize: '0.8rem',
+    color: 'var(--text-dark)',
+    marginLeft: '12px',
+    borderLeft: '1px solid var(--border-color)',
+    paddingLeft: '12px',
+  },
+  nav: {
+    display: 'flex',
+    gap: '8px',
+  },
+  navBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--text-muted)',
+    padding: '10px 18px',
+    borderRadius: '10px',
+    cursor: 'pointer',
+    fontWeight: '600',
+    fontSize: '0.9rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    transition: 'background-color 0.2s, color 0.2s',
+  },
+  navActive: {
+    background: 'rgba(255, 255, 255, 0.05)',
+    color: 'var(--text-main)',
+    border: '1px solid var(--border-color)',
+  },
+  mainContent: {
+    padding: '40px',
+    flexGrow: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  dashboardGrid: {
+    display: 'grid',
+    gridTemplateColumns: '280px 340px minmax(0, 1fr)',
+    gap: '24px',
+    alignItems: 'start',
+  },
+  controlCard: {
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  activeGlow: {
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    boxShadow: '0 0 25px rgba(16, 185, 129, 0.08)',
+  },
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '20px',
+  },
+  cardTitle: {
+    fontSize: '1.05rem',
+    fontWeight: '600',
+    color: 'var(--text-main)',
+  },
+  statusDot: {
+    width: '10px',
+    height: '10px',
+    borderRadius: '50%',
+    display: 'inline-block',
+  },
+  statusRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    padding: '12px 0',
+    borderBottom: '1px solid var(--border-color)',
+  },
+  statusCell: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  statusLabel: {
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+  },
+  statusValue: {
+    fontSize: '0.95rem',
+    fontWeight: '700',
+  },
+  actionButtons: {
+    marginTop: '20px',
+  },
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '40px 20px',
+    textAlign: 'center',
+    gap: '12px',
+  },
+  positionDetails: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '15px',
+    marginTop: '15px',
+  },
+  positionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  entryTime: {
+    fontSize: '0.8rem',
+    color: 'var(--text-muted)',
+  },
+  metricGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '16px',
+    padding: '12px 0',
+  },
+  metricLabel: {
+    display: 'block',
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+    marginBottom: '4px',
+  },
+  metricValue: {
+    fontSize: '1.05rem',
+    fontWeight: '700',
+  },
+  floatingPnl: {
+    border: '1px solid',
+    borderRadius: '10px',
+    padding: '12px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '4px',
+  },
+  pnlLabel: {
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+  },
+  pnlValue: {
+    fontSize: '1.2rem',
+    fontWeight: '800',
+  },
+  formSectionTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '0.8rem',
+    fontWeight: '700',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '14px',
+    borderBottom: '1px solid var(--border-color)',
+    paddingBottom: '6px',
+  },
+  consoleCard: {
+    background: '#040507',
+    padding: '16px',
+    maxHeight: '300px',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  consoleHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '12px',
+  },
+  refreshBtn: {
+    background: 'transparent',
+    border: 'none',
+    color: 'var(--text-dark)',
+    cursor: 'pointer',
+  },
+  consoleContent: {
+    flexGrow: 1,
+    overflowY: 'auto',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '0.8rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  logRow: {
+    display: 'flex',
+    gap: '10px',
+    lineHeight: '1.4',
+  },
+  logTime: {
+    color: 'var(--text-dark)',
+    flexShrink: 0,
+  },
+  logLevel: {
+    fontWeight: '600',
+    flexShrink: 0,
+  },
+  logMsg: {
+    color: 'var(--text-main)',
+    whiteSpace: 'pre-wrap',
+  },
+  chartFallback: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0,0,0,0.3)',
+    border: '1px dashed var(--border-color)',
+    borderRadius: '12px',
+    padding: '20px',
+    textAlign: 'center',
+    color: 'var(--text-muted)',
+    gap: '8px',
+  },
+  backtestContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '24px',
+  },
+  backtestConfigCard: {
+    maxWidth: '1000px',
+  },
+  backtestFormGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+    gap: '16px',
+  },
+  backtestResultsArea: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '24px',
+  },
+  statsSummaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '16px',
+  },
+  statCard: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    padding: '20px',
+  },
+  statLabel: {
+    fontSize: '0.8rem',
+    color: 'var(--text-muted)',
+    display: 'block',
+    marginBottom: '2px',
+  },
+  statVal: {
+    fontSize: '1.3rem',
+    fontWeight: '800',
+  },
+  smallPct: {
+    fontSize: '0.9rem',
+    fontWeight: '600',
+  },
+  tableWrapper: {
+    overflowX: 'auto',
+    marginTop: '10px',
+  },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    textAlign: 'left',
+    fontSize: '0.9rem',
+  },
+  th: {
+    padding: '12px 16px',
+    borderBottom: '1px solid var(--border-color)',
+    color: 'var(--text-muted)',
+    fontWeight: '600',
+  },
+  td: {
+    padding: '12px 16px',
+    borderBottom: '1px solid var(--border-color)',
+    color: 'var(--text-main)',
+  },
+  tr: {
+    transition: 'background-color 0.2s',
+  },
+};

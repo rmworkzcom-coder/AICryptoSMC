@@ -1,0 +1,33 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.development
+.env.production
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs & Temporary Files
+*.log
+backend/trader.log
+backend/trades.json
+
+# Node/Frontend Build & Dependencies
+node_modules/
+dist/
+.svelte-kit/
+.next/
+build/
