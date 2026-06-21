@@ -460,7 +460,7 @@ export default function App() {
                           </span>
                         </div>
                         <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-main)' }}>
-                          ${status.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                           ${status.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}
                         </span>
                       </div>
                     );
@@ -510,7 +510,7 @@ export default function App() {
                 <div style={styles.statusRow}>
                   <div style={styles.statusCell}>
                     <span style={styles.statusLabel}>Latest Price</span>
-                    <span style={styles.statusValue}>${latestPrice ? latestPrice.toLocaleString() : '---'}</span>
+                     <span style={styles.statusValue}>${latestPrice ? latestPrice.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '---'}</span>
                   </div>
                   <div style={styles.statusCell}>
                     <span style={styles.statusLabel}>Paper Balance</span>
@@ -565,19 +565,19 @@ export default function App() {
                           <div style={{ ...styles.metricGrid, marginTop: '10px' }}>
                             <div>
                               <span style={styles.metricLabel}>Entry</span>
-                              <span style={styles.metricValue}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                              <span style={styles.metricValue}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>Current</span>
-                              <span style={styles.metricValue}>${currentPriceForSymbol.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                              <span style={styles.metricValue}>${currentPriceForSymbol.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>SL</span>
-                              <span style={{ ...styles.metricValue, color: 'var(--bearish)' }}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bearish)' }}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>TP</span>
-                              <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
                             </div>
                           </div>
 
@@ -635,8 +635,8 @@ export default function App() {
                           </div>
                           
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            <span>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
-                            <span>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</span>
+                            <span>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
+                            <span>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
                             <span style={{ fontWeight: 'bold', color: isProfit ? 'var(--bullish)' : isLoss ? 'var(--bearish)' : 'var(--text-muted)' }}>
                               {trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(2)}
                             </span>
@@ -946,10 +946,10 @@ export default function App() {
                                   {trade.type.toUpperCase()}
                                 </span>
                               </td>
-                              <td style={styles.td}>${trade.entry_price.toLocaleString()}</td>
-                              <td style={styles.td}>${trade.exit_price.toLocaleString()}</td>
-                              <td style={styles.td}>${trade.sl.toLocaleString()}</td>
-                              <td style={styles.td}>${trade.tp.toLocaleString()}</td>
+                              <td style={styles.td}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
+                              <td style={styles.td}>${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
+                              <td style={styles.td}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
+                              <td style={styles.td}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
                               <td style={{ 
                                 ...styles.td, 
                                 color: trade.pnl >= 0 ? 'var(--bullish)' : 'var(--bearish)',
@@ -1318,8 +1318,8 @@ function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
                           {formatDuration(trade.entry_time, trade.exit_time)}
                         </td>
                         <td style={{ ...styles.td, fontSize: '0.85rem' }}>
-                          <div>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</div>
-                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 4})}</div>
+                          <div>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</div>
+                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</div>
                         </td>
                         <td style={{ ...styles.td, fontSize: '0.85rem' }}>
                           <div>Size: {trade.size.toLocaleString(undefined, {maximumFractionDigits: 6})}</div>
