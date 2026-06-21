@@ -183,6 +183,7 @@ class LiveTrader:
                 }
                 
         try:
+            live_balance = await asyncio.to_thread(self.get_live_balance)
             await self.websocket_broadcast_callback({
                 "type": "state",
                 "data": {
@@ -192,7 +193,7 @@ class LiveTrader:
                     "timeframe": timeframe,
                     "active_trades": self.active_trades,
                     "active_trade": self.active_trade,  # legacy support
-                    "balance": self.paper_balance,
+                    "balance": live_balance,
                     "latest_price": latest_close,
                     "latest_trend": latest_trend,
                     "scanned_symbols_status": scanned_symbols_status,
@@ -283,6 +284,30 @@ class LiveTrader:
         else:
             self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
             self.client = None
+
+    def get_live_balance(self) -> float:
+        if not self.client:
+            return self.paper_balance
+        
+        trading_mode = self.config.get("trading_mode", "paper")
+        if trading_mode != "live":
+            return self.paper_balance
+            
+        market_type = self.config.get("market_type", "futures")
+        try:
+            if market_type == "futures":
+                balances = self.client.futures_account_balance()
+                for b in balances:
+                    if b['asset'] == 'USDT':
+                        return float(b['balance'])
+            else: # spot
+                b = self.client.get_asset_balance(asset='USDT')
+                if b:
+                    return float(b['free']) + float(b['locked'])
+        except Exception as e:
+            logger.error(f"Error fetching live Binance balance: {e}")
+            
+        return self.paper_balance
 
     async def fetch_all_klines(self, symbols: List[str]) -> Dict[str, pd.DataFrame]:
         """Fetch historical klines for multiple symbols concurrently."""
@@ -625,7 +650,8 @@ class LiveTrader:
                         risk_per_share = entry_price - stop_loss
                         
                         if risk_per_share > 0:
-                            risk_usd = self.paper_balance * (risk_pct / 100.0)
+                            current_balance = self.get_live_balance()
+                            risk_usd = current_balance * (risk_pct / 100.0)
                             size = risk_usd / risk_per_share
                             take_profit = entry_price + (rr_ratio * risk_per_share)
                             
@@ -650,7 +676,8 @@ class LiveTrader:
                         risk_per_share = stop_loss - entry_price
                         
                         if risk_per_share > 0:
-                            risk_usd = self.paper_balance * (risk_pct / 100.0)
+                            current_balance = self.get_live_balance()
+                            risk_usd = current_balance * (risk_pct / 100.0)
                             size = risk_usd / risk_per_share
                             take_profit = entry_price - (rr_ratio * risk_per_share)
                             

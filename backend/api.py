@@ -145,7 +145,7 @@ def get_status():
         "symbol": selected_symbol,
         "selected_symbol": selected_symbol,
         "timeframe": trader.config.get("timeframe"),
-        "paper_balance": trader.paper_balance,
+        "paper_balance": trader.get_live_balance(),
         "active_trades": trader.active_trades,
         "active_trade": trader.active_trade,  # legacy support
         "latest_price": latest_close,
@@ -159,7 +159,7 @@ async def get_trades():
         "active_trades": trader.active_trades,
         "active_trade": trader.active_trade,  # legacy support
         "trade_history": trader.trade_history,
-        "paper_balance": trader.paper_balance
+        "paper_balance": trader.get_live_balance()
     }
 
 @app.post("/trades/reset")
@@ -169,7 +169,7 @@ async def reset_trades():
         "status": "success",
         "active_trades": trader.active_trades,
         "trade_history": trader.trade_history,
-        "paper_balance": trader.paper_balance
+        "paper_balance": trader.get_live_balance()
     }
 
 @app.post("/trades/liquidate")
@@ -179,7 +179,7 @@ async def liquidate_trades():
         "status": "success",
         "active_trades": trader.active_trades,
         "trade_history": trader.trade_history,
-        "paper_balance": trader.paper_balance
+        "paper_balance": trader.get_live_balance()
     }
 
 @app.get("/chart")
@@ -331,7 +331,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "timeframe": trader.config.get("timeframe"),
                 "active_trades": trader.active_trades,
                 "active_trade": trader.active_trade,  # legacy support
-                "balance": trader.paper_balance,
+                "balance": trader.get_live_balance(),
                 "latest_price": latest_close,
                 "latest_trend": latest_trend,
                 "scanned_symbols_status": scanned_symbols_status,

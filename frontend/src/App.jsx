@@ -514,7 +514,9 @@ export default function App() {
                      <span style={styles.statusValue}>${latestPrice ? latestPrice.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '---'}</span>
                   </div>
                   <div style={styles.statusCell}>
-                    <span style={styles.statusLabel}>Paper Balance</span>
+                    <span style={styles.statusLabel}>
+                      {config.trading_mode === 'live' ? 'Binance Balance' : 'Paper Balance'}
+                    </span>
                     <span style={{ ...styles.statusValue, color: 'var(--accent-teal)' }}>
                       ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
@@ -1149,7 +1151,7 @@ function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
               {netPnL >= 0 ? '+' : ''}${netPnL.toFixed(2)}
             </h4>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Session Balance: <strong style={{ color: 'var(--text-main)' }}>${balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
+              {config.trading_mode === 'live' ? 'Binance Balance' : 'Session Balance'}: <strong style={{ color: 'var(--text-main)' }}>${balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
             </span>
           </div>
         </div>
