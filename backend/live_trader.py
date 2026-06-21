@@ -9,6 +9,7 @@ import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from binance.client import Client
 from backend.smc_engine import calculate_smc
+from backend.constants import DEFAULT_INITIAL_BALANCE
 
 logger = logging.getLogger("live_trader")
 logger.setLevel(logging.INFO)
@@ -37,7 +38,7 @@ class LiveTrader:
         # Multi-symbol trading state
         self.active_trades = {}  # symbol -> trade dict
         self.trade_history = []
-        self.paper_balance = 1600.0
+        self.paper_balance = DEFAULT_INITIAL_BALANCE
         self.last_candle_times = {}  # symbol -> last_candle_time
         
         # Dataframes cache
@@ -91,7 +92,7 @@ class LiveTrader:
                         symbol = self.config.get("symbol", "BTCUSDT")
                         self.active_trades[symbol] = data["active_trade"]
                     self.trade_history = data.get("trade_history", [])
-                    self.paper_balance = data.get("paper_balance", 1600.0)
+                    self.paper_balance = data.get("paper_balance", DEFAULT_INITIAL_BALANCE)
             except Exception as e:
                 logger.error(f"Error loading trades.json: {e}")
 
@@ -109,7 +110,7 @@ class LiveTrader:
     def reset_trades(self):
         self.active_trades = {}
         self.trade_history = []
-        self.paper_balance = 1600.0
+        self.paper_balance = DEFAULT_INITIAL_BALANCE
         self.save_trades()
         self.log_message("Trading state and history reset to default.")
         

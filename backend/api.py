@@ -12,6 +12,7 @@ import requests
 from backend.live_trader import LiveTrader, log_file
 from backend.backtester import run_backtest
 from backend.smc_engine import calculate_smc
+from backend.constants import DEFAULT_INITIAL_BALANCE
 import numpy as np
 
 def serialize_numpy(obj):
@@ -80,7 +81,7 @@ class ConfigUpdate(BaseModel):
 class BacktestRequest(BaseModel):
     symbol: str
     timeframe: str
-    initial_balance: float = 1600.0
+    initial_balance: float = DEFAULT_INITIAL_BALANCE
     risk_pct: float = 1.0
     rr_ratio: float = 2.0
     n_swing: int = 2

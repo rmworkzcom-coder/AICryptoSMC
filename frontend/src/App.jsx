@@ -8,6 +8,7 @@ import {
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
 const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
+const DEFAULT_INITIAL_BALANCE = 1600.0;
 
 // SMC Chart Component using Lightweight Charts
 function SMCChart({ data, structures, symbol, timeframe }) {
@@ -137,7 +138,7 @@ export default function App() {
   const [botRunning, setBotRunning] = useState(false);
   const [botSymbol, setBotSymbol] = useState('BTCUSDT');
   const [botTimeframe, setBotTimeframe] = useState('15m');
-  const [balance, setBalance] = useState(1600.0);
+  const [balance, setBalance] = useState(DEFAULT_INITIAL_BALANCE);
   const [activeTrade, setActiveTrade] = useState(null);
   const [activeTrades, setActiveTrades] = useState({});
   const [scannedSymbolsStatus, setScannedSymbolsStatus] = useState({});
@@ -168,7 +169,7 @@ export default function App() {
   const [backtestConfig, setBacktestConfig] = useState({
     symbol: 'BTCUSDT',
     timeframe: '15m',
-    initial_balance: 1600.0,
+    initial_balance: DEFAULT_INITIAL_BALANCE,
     risk_pct: 1.0,
     rr_ratio: 2.0,
     n_swing: 2,
@@ -546,7 +547,7 @@ export default function App() {
                             const data = await res.json();
                             setActiveTrades(data.active_trades || {});
                             setTradeHistory(data.trade_history || []);
-                            setBalance(data.paper_balance || 1600.0);
+                            setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
                             alert("All active positions liquidated successfully.");
                           } catch (e) {
                             alert("Failed to liquidate positions: " + e.message);
@@ -752,12 +753,12 @@ export default function App() {
             tradeHistory={tradeHistory} 
             balance={balance}
             onResetHistory={async () => {
-              if (window.confirm("Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $1,600.0.")) {
+              if (window.confirm(`Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $${DEFAULT_INITIAL_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 1})}.`)) {
                 try {
                   const res = await fetch(`http://${window.location.hostname}:8000/trades/reset`, { method: 'POST' });
                   const data = await res.json();
                   setTradeHistory(data.trade_history || []);
-                  setBalance(data.paper_balance || 1600.0);
+                  setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
                   alert("Session history and balance reset successfully.");
                 } catch (e) {
                   alert("Failed to reset history: " + e.message);
@@ -812,7 +813,7 @@ export default function App() {
                     type="number" 
                     value={backtestConfig.initial_balance} 
                     className="form-input"
-                    onChange={e => setBacktestConfig(prev => ({ ...prev, initial_balance: parseFloat(e.target.value) || 1600 }))}
+                    onChange={e => setBacktestConfig(prev => ({ ...prev, initial_balance: parseFloat(e.target.value) || DEFAULT_INITIAL_BALANCE }))}
                   />
                 </div>
 
