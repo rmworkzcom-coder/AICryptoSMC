@@ -866,6 +866,22 @@ class LiveTrader:
                 
                 if market_type == "futures":
                     portfolio_margin = self.config.get("portfolio_margin", False)
+                    # Automatically adjust leverage to 20x to minimize initial margin and prevent failures
+                    if portfolio_margin:
+                        try:
+                            self.log_message(f"[{symbol}] [PAPI] Setting leverage to 20x on exchange...")
+                            self._make_papi_request("POST", "/papi/v1/um/leverage", {
+                                "symbol": symbol,
+                                "leverage": 20
+                            })
+                        except Exception as e:
+                            self.log_message(f"[{symbol}] [PAPI] Failed to set leverage: {e}", "info")
+                    elif self.client:
+                        try:
+                            self.client.futures_change_leverage(symbol=symbol, leverage=20)
+                        except Exception as e:
+                            pass
+
                     if portfolio_margin:
                         # Portfolio Margin order entry via PAPI
                         side = 'BUY' if trade_type == 'long' else 'SELL'
