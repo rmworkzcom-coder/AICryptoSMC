@@ -114,10 +114,10 @@ function SMCChart({ data, structures, symbol, timeframe }) {
     const validMarkers = markers.filter(m => seenTimes.has(m.time));
     createSeriesMarkers(candleSeries, validMarkers);
 
-    if (uniqueData.length > 100) {
+    if (uniqueData.length > 30) {
       chart.timeScale().setVisibleLogicalRange({
-        from: uniqueData.length - 100,
-        to: uniqueData.length
+        from: uniqueData.length - 30,
+        to: uniqueData.length + 3
       });
     } else {
       chart.timeScale().fitContent();

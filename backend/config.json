@@ -15,7 +15,7 @@
   "breakeven_trigger": 1.0,
   "running": true,
   "max_active_trades": 5,
-  "selected_symbol": "REUSDT",
+  "selected_symbol": "XRPUSDT",
   "dynamic_scan": true,
   "max_scanned_coins": 200,
   "symbols": [
