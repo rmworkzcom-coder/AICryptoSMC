@@ -4,6 +4,8 @@ import logging
 import time
 import os
 import requests
+import hmac
+import hashlib
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
@@ -285,25 +287,90 @@ class LiveTrader:
             self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
             self.client = None
 
-    def get_live_balance(self) -> float:
-        if not self.client:
-            return self.paper_balance
+    def _make_papi_request(self, method: str, endpoint: str, params: dict = None) -> dict:
+        """Helper to sign and execute REST requests to the Binance Portfolio Margin API."""
+        api_key = self.config.get("binance_api_key")
+        api_secret = self.config.get("binance_api_secret")
         
+        if not api_key or not api_secret:
+            env_key, env_secret = self.load_env_keys()
+            if env_key and env_secret:
+                api_key = env_key
+                api_secret = env_secret
+                
+        if not api_key or not api_secret:
+            raise ValueError("Binance API keys are missing.")
+            
+        base_url = "https://papi.binance.com"
+        if params is None:
+            params = {}
+            
+        # Ensure timestamp and recvWindow are present
+        timestamp = int(time.time() * 1000)
+        payload = {**params, "recvWindow": 10000, "timestamp": timestamp}
+        
+        # Sort and construct query string
+        query_string = "&".join([f"{k}={v}" for k, v in sorted(payload.items())])
+        
+        # Calculate HMAC signature
+        signature = hmac.new(
+            api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
+        
+        headers = {
+            "X-MBX-APIKEY": api_key,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
+        url = f"{base_url}{endpoint}"
+        
+        try:
+            if method == "GET" or method == "DELETE":
+                url = f"{url}?{query_string}&signature={signature}"
+                res = requests.request(method, url, headers=headers, timeout=10)
+            else: # POST, PUT, etc.
+                post_data = f"{query_string}&signature={signature}"
+                res = requests.request(method, url, headers=headers, data=post_data, timeout=10)
+                
+            res.raise_for_status()
+            return res.json()
+        except requests.exceptions.HTTPError as e:
+            resp_text = res.text if 'res' in locals() else 'No response'
+            logger.error(f"PAPI API Request failed: {e}. Response body: {resp_text}")
+            raise e
+
+    def get_live_balance(self) -> float:
         trading_mode = self.config.get("trading_mode", "paper")
         if trading_mode != "live":
             return self.paper_balance
             
-        market_type = self.config.get("market_type", "futures")
+        portfolio_margin = self.config.get("portfolio_margin", False)
+        
         try:
-            if market_type == "futures":
-                balances = self.client.futures_account_balance()
-                for b in balances:
-                    if b['asset'] == 'USDT':
-                        return float(b['balance'])
-            else: # spot
-                b = self.client.get_asset_balance(asset='USDT')
-                if b:
-                    return float(b['free']) + float(b['locked'])
+            if portfolio_margin:
+                res = self._make_papi_request("GET", "/papi/v1/balance")
+                if isinstance(res, list):
+                    for b in res:
+                        if b.get('asset') == 'USDT':
+                            return float(b.get('totalWalletBalance', 0.0))
+                elif isinstance(res, dict):
+                    if res.get('asset') == 'USDT':
+                        return float(res.get('totalWalletBalance', 0.0))
+            else:
+                if not self.client:
+                    return self.paper_balance
+                market_type = self.config.get("market_type", "futures")
+                if market_type == "futures":
+                    balances = self.client.futures_account_balance()
+                    for b in balances:
+                        if b['asset'] == 'USDT':
+                            return float(b['balance'])
+                else: # spot
+                    b = self.client.get_asset_balance(asset='USDT')
+                    if b:
+                        return float(b['free']) + float(b['locked'])
         except Exception as e:
             logger.error(f"Error fetching live Binance balance: {e}")
             
@@ -692,7 +759,16 @@ class LiveTrader:
                 info = self.client.futures_exchange_info()
                 for s in info['symbols']:
                     if s['symbol'] == symbol:
-                        return int(s['pricePrecision']), int(s['quantityPrecision'])
+                        price_precision = int(s['pricePrecision'])
+                        qty_precision = int(s['quantityPrecision'])
+                        for f in s.get('filters', []):
+                            if f['filterType'] == 'PRICE_FILTER':
+                                tick_size = float(f['tickSize'])
+                                price_precision = int(round(-np.log10(tick_size)))
+                            elif f['filterType'] == 'LOT_SIZE':
+                                step_size = float(f['stepSize'])
+                                qty_precision = int(round(-np.log10(step_size)))
+                        return price_precision, qty_precision
             else:
                 info = self.client.get_symbol_info(symbol)
                 price_precision = 2
@@ -745,43 +821,86 @@ class LiveTrader:
                 formatted_sl = round(sl, price_prec)
                 formatted_tp = round(tp, price_prec)
                 
+                qty_str = f"{formatted_qty:.{max(0, qty_prec)}f}" if qty_prec >= 0 else str(int(formatted_qty))
+                sl_str = f"{formatted_sl:.{max(0, price_prec)}f}" if price_prec >= 0 else str(int(formatted_sl))
+                tp_str = f"{formatted_tp:.{max(0, price_prec)}f}" if price_prec >= 0 else str(int(formatted_tp))
+                
                 if market_type == "futures":
-                    # Futures order entry
-                    side = Client.SIDE_BUY if trade_type == 'long' else Client.SIDE_SELL
-                    opp_side = Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY
-                    
-                    self.log_message(f"[{symbol}] Placing Live Futures {trade_type.upper()} Market Order for {formatted_qty}...")
-                    
-                    # 1. Place entry order
-                    entry_order = self.client.futures_create_order(
-                        symbol=symbol,
-                        side=side,
-                        type=Client.ORDER_TYPE_MARKET,
-                        quantity=formatted_qty
-                    )
-                    trade_details['entry_order_id'] = entry_order['orderId']
-                    
-                    # 2. Place stop-loss order
-                    self.log_message(f"[{symbol}] Placing Live Futures Stop Loss Order at {formatted_sl}...")
-                    sl_order = self.client.futures_create_order(
-                        symbol=symbol,
-                        side=opp_side,
-                        type='STOP_MARKET',
-                        stopPrice=formatted_sl,
-                        closePosition=True
-                    )
-                    trade_details['sl_order_id'] = sl_order['orderId']
-                    
-                    # 3. Place take-profit order
-                    self.log_message(f"[{symbol}] Placing Live Futures Take Profit Order at {formatted_tp}...")
-                    tp_order = self.client.futures_create_order(
-                        symbol=symbol,
-                        side=opp_side,
-                        type='TAKE_PROFIT_MARKET',
-                        stopPrice=formatted_tp,
-                        closePosition=True
-                    )
-                    trade_details['tp_order_id'] = tp_order['orderId']
+                    portfolio_margin = self.config.get("portfolio_margin", False)
+                    if portfolio_margin:
+                        # Portfolio Margin order entry via PAPI
+                        side = 'BUY' if trade_type == 'long' else 'SELL'
+                        opp_side = 'SELL' if trade_type == 'long' else 'BUY'
+                        
+                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures {trade_type.upper()} Market Order for {qty_str}...")
+                        entry_order = self._make_papi_request("POST", "/papi/v1/um/order", {
+                            "symbol": symbol,
+                            "side": side,
+                            "type": "MARKET",
+                            "quantity": qty_str
+                        })
+                        trade_details['entry_order_id'] = entry_order['orderId']
+                        
+                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Stop Loss Order at {sl_str}...")
+                        sl_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
+                            "symbol": symbol,
+                            "side": opp_side,
+                            "type": "STOP_MARKET",
+                            "algoType": "CONDITIONAL",
+                            "triggerPrice": sl_str,
+                            "quantity": qty_str,
+                            "reduceOnly": "true"
+                        })
+                        trade_details['sl_order_id'] = sl_order.get('algoId')
+                        
+                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Take Profit Order at {tp_str}...")
+                        tp_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
+                            "symbol": symbol,
+                            "side": opp_side,
+                            "type": "TAKE_PROFIT_MARKET",
+                            "algoType": "CONDITIONAL",
+                            "triggerPrice": tp_str,
+                            "quantity": qty_str,
+                            "reduceOnly": "true"
+                        })
+                        trade_details['tp_order_id'] = tp_order.get('algoId')
+                    else:
+                        # Standard Futures order entry
+                        side = Client.SIDE_BUY if trade_type == 'long' else Client.SIDE_SELL
+                        opp_side = Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY
+                        
+                        self.log_message(f"[{symbol}] Placing Live Futures {trade_type.upper()} Market Order for {formatted_qty}...")
+                        
+                        # 1. Place entry order
+                        entry_order = self.client.futures_create_order(
+                            symbol=symbol,
+                            side=side,
+                            type=Client.ORDER_TYPE_MARKET,
+                            quantity=formatted_qty
+                        )
+                        trade_details['entry_order_id'] = entry_order['orderId']
+                        
+                        # 2. Place stop-loss order
+                        self.log_message(f"[{symbol}] Placing Live Futures Stop Loss Order at {formatted_sl}...")
+                        sl_order = self.client.futures_create_order(
+                            symbol=symbol,
+                            side=opp_side,
+                            type='STOP_MARKET',
+                            stopPrice=formatted_sl,
+                            closePosition=True
+                        )
+                        trade_details['sl_order_id'] = sl_order['orderId']
+                        
+                        # 3. Place take-profit order
+                        self.log_message(f"[{symbol}] Placing Live Futures Take Profit Order at {formatted_tp}...")
+                        tp_order = self.client.futures_create_order(
+                            symbol=symbol,
+                            side=opp_side,
+                            type='TAKE_PROFIT_MARKET',
+                            stopPrice=formatted_tp,
+                            closePosition=True
+                        )
+                        trade_details['tp_order_id'] = tp_order['orderId']
                     
                 else: # Spot trading
                     if trade_type == 'short':
@@ -846,12 +965,26 @@ class LiveTrader:
             except Exception:
                 pass
         
-        if trading_mode == "live" and self.client:
+        if trading_mode == "live":
             try:
                 if market_type == "futures":
-                    self.log_message(f"[{symbol}] Cancelling any open bracket orders for this symbol on Futures...")
-                    self.client.futures_cancel_all_open_orders(symbol=symbol)
-                else:
+                    portfolio_margin = self.config.get("portfolio_margin", False)
+                    if portfolio_margin:
+                        self.log_message(f"[{symbol}] [PAPI] Cancelling any open limit orders for this symbol on Futures...")
+                        try:
+                            self._make_papi_request("DELETE", "/papi/v1/um/allOpenOrders", {"symbol": symbol})
+                        except Exception as e:
+                            self.log_message(f"[{symbol}] [PAPI] Failed to cancel limit orders (possibly none open): {e}", "info")
+                        
+                        self.log_message(f"[{symbol}] [PAPI] Cancelling any open algo orders for this symbol on Futures...")
+                        try:
+                            self._make_papi_request("DELETE", "/papi/v1/um/algo/allOpenOrders", {"symbol": symbol})
+                        except Exception as e:
+                            self.log_message(f"[{symbol}] [PAPI] Failed to cancel algo orders (possibly none open): {e}", "info")
+                    elif self.client:
+                        self.log_message(f"[{symbol}] Cancelling any open bracket orders for this symbol on Futures...")
+                        self.client.futures_cancel_all_open_orders(symbol=symbol)
+                elif self.client:
                     self.log_message(f"[{symbol}] Cancelling any open OCO orders for this symbol on Spot...")
                     open_orders = self.client.get_open_orders(symbol=symbol)
                     for order in open_orders:

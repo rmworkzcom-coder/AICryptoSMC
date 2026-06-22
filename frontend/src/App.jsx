@@ -9,6 +9,7 @@ import {
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
 const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_INITIAL_BALANCE = 1600.0;
+const BACKEND_PORT = '3009';
 
 // SMC Chart Component using Lightweight Charts
 function SMCChart({ data, structures, symbol, timeframe }) {
@@ -162,7 +163,8 @@ export default function App() {
     n_swing: 2,
     x_impulse: 2.0,
     m_range: 5,
-    breakeven_trigger: 1.0
+    breakeven_trigger: 1.0,
+    portfolio_margin: false
   });
 
   // Backtest States
@@ -210,7 +212,7 @@ export default function App() {
   const fetchLiveChart = async (symbolToFetch) => {
     try {
       const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
-      const res = await fetch(`http://${window.location.hostname}:8000/chart?symbol=${sym}`);
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/chart?symbol=${sym}`);
       const data = await res.json();
       setLiveChartData(data.chart_data);
       setLiveStructures(data.structures);
@@ -224,7 +226,7 @@ export default function App() {
   }, [logs]);
 
   const connectWebSocket = () => {
-    const ws = new WebSocket(`ws://${window.location.hostname}:8000/ws`);
+    const ws = new WebSocket(`ws://${window.location.hostname}:${BACKEND_PORT}/ws`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -259,7 +261,7 @@ export default function App() {
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:8000/config`);
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`);
       const data = await res.json();
       setConfig(data);
       // Sync backtest parameters with current settings as start
@@ -281,7 +283,7 @@ export default function App() {
 
   const fetchTrades = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:8000/trades`);
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades`);
       const data = await res.json();
       setActiveTrade(data.active_trade);
       setActiveTrades(data.active_trades || {});
@@ -294,7 +296,7 @@ export default function App() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:8000/logs`);
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/logs`);
       const data = await res.json();
       setLogs(data);
     } catch (e) {
@@ -304,7 +306,7 @@ export default function App() {
 
   const saveConfig = async (updatedConfig) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:8000/config`, {
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedConfig)
@@ -322,7 +324,7 @@ export default function App() {
 
   const startBot = async () => {
     try {
-      await fetch(`http://${window.location.hostname}:8000/bot/start`, { method: 'POST' });
+      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/bot/start`, { method: 'POST' });
       setBotRunning(true);
     } catch (e) {
       console.error(e);
@@ -331,7 +333,7 @@ export default function App() {
 
   const stopBot = async () => {
     try {
-      await fetch(`http://${window.location.hostname}:8000/bot/stop`, { method: 'POST' });
+      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/bot/stop`, { method: 'POST' });
       setBotRunning(false);
     } catch (e) {
       console.error(e);
@@ -341,7 +343,7 @@ export default function App() {
   const handleSelectSymbol = async (symbol) => {
     setSelectedSymbol(symbol);
     try {
-      await fetch(`http://${window.location.hostname}:8000/config`, {
+      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selected_symbol: symbol })
@@ -356,7 +358,7 @@ export default function App() {
     setBacktesting(true);
     setBacktestResults(null);
     try {
-      const res = await fetch(`http://${window.location.hostname}:8000/backtest`, {
+      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(backtestConfig)
@@ -545,7 +547,7 @@ export default function App() {
                       onClick={async () => {
                         if (window.confirm("Are you sure you want to liquidate all active positions at their current market prices?")) {
                           try {
-                            const res = await fetch(`http://${window.location.hostname}:8000/trades/liquidate`, { method: 'POST' });
+                            const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/liquidate`, { method: 'POST' });
                             const data = await res.json();
                             setActiveTrades(data.active_trades || {});
                             setTradeHistory(data.trade_history || []);
@@ -757,7 +759,7 @@ export default function App() {
             onResetHistory={async () => {
               if (window.confirm(`Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $${DEFAULT_INITIAL_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 1})}.`)) {
                 try {
-                  const res = await fetch(`http://${window.location.hostname}:8000/trades/reset`, { method: 'POST' });
+                  const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
                   const data = await res.json();
                   setTradeHistory(data.trade_history || []);
                   setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
@@ -1468,6 +1470,18 @@ function SettingsPanel({ config, saveConfig }) {
               type="checkbox" 
               checked={localConfig.testnet}
               onChange={e => setLocalConfig(prev => ({ ...prev, testnet: e.target.checked }))}
+            />
+            <span className="slider"></span>
+          </label>
+        </div>
+
+        <div className="form-group" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+          <label style={{ margin: 0 }}>Portfolio Margin Account</label>
+          <label className="switch">
+            <input 
+              type="checkbox" 
+              checked={localConfig.portfolio_margin || false}
+              onChange={e => setLocalConfig(prev => ({ ...prev, portfolio_margin: e.target.checked }))}
             />
             <span className="slider"></span>
           </label>

@@ -77,6 +77,7 @@ class ConfigUpdate(BaseModel):
     max_active_trades: Optional[int] = None
     selected_symbol: Optional[str] = None
     symbols: Optional[List[str]] = None
+    portfolio_margin: Optional[bool] = None
 
 class BacktestRequest(BaseModel):
     symbol: str

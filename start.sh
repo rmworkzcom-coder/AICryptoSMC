@@ -11,7 +11,7 @@ echo "==============================================="
 cd "$(dirname "$0")"
 
 # Start the Backend FastAPI Server
-echo "🚀 Launching Python Backend on http://localhost:8000..."
+echo "🚀 Launching Python Backend on http://localhost:3009..."
 PYTHONPATH=. venv/bin/python backend/main.py &
 
 # Wait briefly for backend startup
