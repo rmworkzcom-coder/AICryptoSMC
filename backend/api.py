@@ -174,8 +174,11 @@ async def reset_trades():
     }
 
 @app.post("/trades/liquidate")
-async def liquidate_trades():
-    trader.liquidate_all_trades()
+async def liquidate_trades(symbol: Optional[str] = None):
+    if symbol:
+        trader.liquidate_trade(symbol)
+    else:
+        trader.liquidate_all_trades()
     return {
         "status": "success",
         "active_trades": trader.active_trades,

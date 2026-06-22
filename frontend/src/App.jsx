@@ -627,9 +627,37 @@ export default function App() {
                                 {trade.type.toUpperCase()}
                               </span>
                             </div>
-                            <span style={styles.entryTime}>
-                              {new Date(trade.entry_time).toLocaleTimeString()}
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                              <span style={styles.entryTime}>
+                                {new Date(trade.entry_time).toLocaleTimeString()}
+                              </span>
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (window.confirm(`Are you sure you want to liquidate the ${symbol} position?`)) {
+                                    try {
+                                      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/liquidate?symbol=${symbol}`, { method: 'POST' });
+                                      const data = await res.json();
+                                      setActiveTrades(data.active_trades || {});
+                                      setTradeHistory(data.trade_history || []);
+                                      setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
+                                      alert(`${symbol} position liquidated successfully.`);
+                                    } catch (err) {
+                                      alert("Failed to liquidate position: " + err.message);
+                                    }
+                                  }
+                                }}
+                                className="btn-danger"
+                                style={{ 
+                                  padding: '2px 8px', 
+                                  fontSize: '0.75rem', 
+                                  borderRadius: '4px',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                Liquidate
+                              </button>
+                            </div>
                           </div>
 
                           <div style={{ ...styles.metricGrid, marginTop: '10px' }}>

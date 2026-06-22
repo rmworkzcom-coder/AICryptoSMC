@@ -125,72 +125,119 @@ class LiveTrader:
             except RuntimeError:
                 pass
 
-    def liquidate_all_trades(self):
-        symbols_to_close = list(self.active_trades.keys())
-        if not symbols_to_close:
-            self.log_message("No active positions to liquidate.")
+    def get_latest_price(self, symbol: str) -> float:
+        market_type = self.config.get("market_type", "futures")
+        try:
+            if market_type == "futures":
+                url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
+            else:
+                url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+            
+            res = requests.get(url, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                price = float(data.get('price', 0.0))
+                if price > 0:
+                    return price
+        except Exception as e:
+            logger.error(f"Error fetching latest price for {symbol}: {e}")
+            
+        # Fallback to last candle close if request fails
+        df = self.dfs.get(symbol)
+        if df is not None and len(df) > 0:
+            return float(df.iloc[-1]['close'])
+        return 0.0
+
+    def liquidate_trade(self, symbol: str):
+        if symbol not in self.active_trades:
+            self.log_message(f"No active position for {symbol} to liquidate.")
             return
             
         trading_mode = self.config.get("trading_mode", "paper")
         market_type = self.config.get("market_type", "futures")
         portfolio_margin = self.config.get("portfolio_margin", False)
         
-        for symbol in symbols_to_close:
-            trade = self.active_trades[symbol]
-            trade_type = trade['type']
-            entry_price = trade['entry_price']
-            size = trade['size']
-            
-            # Fetch latest price
+        trade = self.active_trades[symbol]
+        trade_type = trade['type']
+        entry_price = trade['entry_price']
+        size = trade['size']
+        
+        # Fetch current mark/ticker price for exit_price
+        exit_price = self.get_latest_price(symbol)
+        if exit_price <= 0:
             exit_price = entry_price
-            df = self.dfs.get(symbol)
-            if df is not None and len(df) > 0:
-                exit_price = float(df.iloc[-1]['close'])
-                
-            # Calculate PnL
-            if trade_type == 'long':
-                pnl = (exit_price - entry_price) * size
-            else: # short
-                pnl = (entry_price - exit_price) * size
-                
-            # If in live mode, place a market order to close the actual position on the exchange
-            if trading_mode == "live":
-                opp_side = 'SELL' if trade_type == 'long' else 'BUY'
-                self.log_message(f"[{symbol}] Placing Live MARKET Close Order to liquidate position of size {size}...")
-                try:
-                    if market_type == "futures":
-                        if portfolio_margin:
-                            price_prec, qty_prec = self.get_symbol_precision(symbol, market_type)
-                            formatted_qty = round(size, qty_prec)
-                            qty_str = f"{formatted_qty:.{max(0, qty_prec)}f}" if qty_prec >= 0 else str(int(formatted_qty))
-                            
-                            self._make_papi_request("POST", "/papi/v1/um/order", {
-                                "symbol": symbol,
-                                "side": opp_side,
-                                "type": "MARKET",
-                                "quantity": qty_str
-                            })
-                        elif self.client:
-                            self.client.futures_create_order(
-                                symbol=symbol,
-                                side=opp_side,
-                                type=Client.ORDER_TYPE_MARKET,
-                                quantity=size
-                            )
-                    elif self.client: # spot
-                        self.client.create_order(
+            
+        # Calculate PnL
+        if trade_type == 'long':
+            pnl = (exit_price - entry_price) * size
+        else: # short
+            pnl = (entry_price - exit_price) * size
+            
+        # If in live mode, place a market order to close the actual position on the exchange
+        if trading_mode == "live":
+            opp_side = 'SELL' if trade_type == 'long' else 'BUY'
+            self.log_message(f"[{symbol}] Placing Live MARKET Close Order to liquidate position of size {size}...")
+            try:
+                if market_type == "futures":
+                    if portfolio_margin:
+                        price_prec, qty_prec = self.get_symbol_precision(symbol, market_type)
+                        formatted_qty = round(size, qty_prec)
+                        qty_str = f"{formatted_qty:.{max(0, qty_prec)}f}" if qty_prec >= 0 else str(int(formatted_qty))
+                        
+                        res = self._make_papi_request("POST", "/papi/v1/um/order", {
+                            "symbol": symbol,
+                            "side": opp_side,
+                            "type": "MARKET",
+                            "quantity": qty_str
+                        })
+                        
+                        # Use actual execution fill price if available in response
+                        if res and isinstance(res, dict):
+                            avg_price = res.get('avgPrice')
+                            if avg_price and float(avg_price) > 0:
+                                exit_price = float(avg_price)
+                                if trade_type == 'long':
+                                    pnl = (exit_price - entry_price) * size
+                                else:
+                                    pnl = (entry_price - exit_price) * size
+                                self.log_message(f"[{symbol}] Executed Close at avg price {exit_price}")
+                    elif self.client:
+                        res = self.client.futures_create_order(
                             symbol=symbol,
-                            side=Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY,
+                            side=opp_side,
                             type=Client.ORDER_TYPE_MARKET,
                             quantity=size
                         )
-                except Exception as e:
-                    self.log_message(f"[{symbol}] Failed to execute close order on exchange: {e}", "error")
+                        if res and isinstance(res, dict):
+                            avg_price = res.get('avgPrice')
+                            if avg_price and float(avg_price) > 0:
+                                exit_price = float(avg_price)
+                                if trade_type == 'long':
+                                    pnl = (exit_price - entry_price) * size
+                                else:
+                                    pnl = (entry_price - exit_price) * size
+                elif self.client: # spot
+                    self.client.create_order(
+                        symbol=symbol,
+                        side=Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY,
+                        type=Client.ORDER_TYPE_MARKET,
+                        quantity=size
+                    )
+            except Exception as e:
+                self.log_message(f"[{symbol}] Failed to execute close order on exchange: {e}", "error")
+        
+        self.paper_balance += pnl
+        self.close_trade(symbol, exit_price, pnl, "LIQ")
+
+    def liquidate_all_trades(self):
+        symbols_to_close = list(self.active_trades.keys())
+        if not symbols_to_close:
+            self.log_message("No active positions to liquidate.")
+            return
             
-            self.paper_balance += pnl
-            self.close_trade(symbol, exit_price, pnl, "LIQ")
+        for symbol in symbols_to_close:
+            self.liquidate_trade(symbol)
             
-        self.save_trades()
         self.log_message("All active positions have been liquidated.")
 
     async def broadcast_current_state(self):
