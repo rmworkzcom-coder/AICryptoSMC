@@ -347,8 +347,9 @@ class LiveTrader:
         timestamp = int(time.time() * 1000)
         payload = {**params, "recvWindow": 10000, "timestamp": timestamp}
         
-        # Sort and construct query string
-        query_string = "&".join([f"{k}={v}" for k, v in sorted(payload.items())])
+        # Sort and construct query string (percent-encode to handle non-ASCII/special characters)
+        from urllib.parse import urlencode
+        query_string = urlencode(sorted(payload.items()))
         
         # Calculate HMAC signature
         signature = hmac.new(
