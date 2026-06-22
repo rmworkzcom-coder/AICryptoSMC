@@ -9,7 +9,7 @@ import {
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
 const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_INITIAL_BALANCE = 1600.0;
-const BACKEND_PORT = '3009';
+const BACKEND_PORT = '8000';
 
 // SMC Chart Component using Lightweight Charts
 function SMCChart({ data, structures, symbol, timeframe }) {
