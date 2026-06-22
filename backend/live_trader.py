@@ -976,11 +976,23 @@ class LiveTrader:
                     del self.active_trades[symbol]
                 self.save_trades()
 
-    def close_trade(self, symbol: str, exit_price: float, pnl: float, status: str):
+    def close_trade(self, symbol: str, exit_price: float, raw_pnl: float, status: str):
         if symbol not in self.active_trades:
             return
             
         trade = self.active_trades[symbol]
+        entry_price = trade['entry_price']
+        size = trade['size']
+        
+        # Calculate realistic transaction fees (0.04% taker) and slippage (0.02%) per side
+        fee_rate = 0.0004
+        slippage_rate = 0.0002
+        total_drag_rate = fee_rate + slippage_rate
+        drag_amount = (entry_price + exit_price) * size * total_drag_rate
+        
+        pnl = raw_pnl - drag_amount
+        self.paper_balance -= drag_amount
+        
         closed_trade = {
             **trade,
             'exit_time': int(time.time() * 1000),
