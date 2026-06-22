@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createChart, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, CandlestickSeries, createSeriesMarkers, LineStyle } from 'lightweight-charts';
 import { 
   Play, Square, Settings as SettingsIcon, Activity, History, 
   BarChart3, RefreshCw, Key, ShieldAlert, Cpu, CheckCircle2, 
@@ -12,7 +12,7 @@ const DEFAULT_INITIAL_BALANCE = 1600.0;
 const BACKEND_PORT = '8000';
 
 // SMC Chart Component using Lightweight Charts
-function SMCChart({ data, structures, symbol, timeframe }) {
+function SMCChart({ data, structures, symbol, timeframe, activeTrade }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
 
@@ -123,6 +123,40 @@ function SMCChart({ data, structures, symbol, timeframe }) {
       chart.timeScale().fitContent();
     }
 
+    // Draw active trade lines if present
+    if (activeTrade) {
+      const entryPrice = parseFloat(activeTrade.entry_price);
+      const slPrice = parseFloat(activeTrade.sl);
+      const tpPrice = parseFloat(activeTrade.tp);
+
+      candleSeries.createPriceLine({
+        price: entryPrice,
+        color: '#3b82f6', // Blue for entry
+        lineWidth: 1.5,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `ENTRY: $${entryPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+      });
+
+      candleSeries.createPriceLine({
+        price: slPrice,
+        color: '#ef4444', // Red for stop loss
+        lineWidth: 1.5,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `SL: $${slPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+      });
+
+      candleSeries.createPriceLine({
+        price: tpPrice,
+        color: '#10b981', // Green for take profit
+        lineWidth: 1.5,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `TP: $${tpPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+      });
+    }
+
     const handleResize = () => {
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
@@ -134,7 +168,7 @@ function SMCChart({ data, structures, symbol, timeframe }) {
       window.removeEventListener('resize', handleResize);
       chart.remove();
     };
-  }, [data, structures]);
+  }, [data, structures, activeTrade]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '380px' }} />;
 }
@@ -714,6 +748,7 @@ export default function App() {
                       structures={liveStructures} 
                       symbol={selectedSymbol} 
                       timeframe={botTimeframe} 
+                      activeTrade={activeTrades[selectedSymbol]}
                     />
                   ) : (
                     <div style={styles.chartFallback}>
