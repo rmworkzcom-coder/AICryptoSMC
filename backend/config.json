@@ -17,7 +17,7 @@
   "max_active_trades": 5,
   "selected_symbol": "TNSRUSDT",
   "dynamic_scan": true,
-  "max_scanned_coins": 200,
+  "max_scanned_coins": 250,
   "symbols": [
     "BTCUSDT",
     "ETHUSDT",
