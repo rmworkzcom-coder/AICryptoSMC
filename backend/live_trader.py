@@ -131,6 +131,10 @@ class LiveTrader:
             self.log_message("No active positions to liquidate.")
             return
             
+        trading_mode = self.config.get("trading_mode", "paper")
+        market_type = self.config.get("market_type", "futures")
+        portfolio_margin = self.config.get("portfolio_margin", False)
+        
         for symbol in symbols_to_close:
             trade = self.active_trades[symbol]
             trade_type = trade['type']
@@ -149,6 +153,40 @@ class LiveTrader:
             else: # short
                 pnl = (entry_price - exit_price) * size
                 
+            # If in live mode, place a market order to close the actual position on the exchange
+            if trading_mode == "live":
+                opp_side = 'SELL' if trade_type == 'long' else 'BUY'
+                self.log_message(f"[{symbol}] Placing Live MARKET Close Order to liquidate position of size {size}...")
+                try:
+                    if market_type == "futures":
+                        if portfolio_margin:
+                            price_prec, qty_prec = self.get_symbol_precision(symbol, market_type)
+                            formatted_qty = round(size, qty_prec)
+                            qty_str = f"{formatted_qty:.{max(0, qty_prec)}f}" if qty_prec >= 0 else str(int(formatted_qty))
+                            
+                            self._make_papi_request("POST", "/papi/v1/um/order", {
+                                "symbol": symbol,
+                                "side": opp_side,
+                                "type": "MARKET",
+                                "quantity": qty_str
+                            })
+                        elif self.client:
+                            self.client.futures_create_order(
+                                symbol=symbol,
+                                side=opp_side,
+                                type=Client.ORDER_TYPE_MARKET,
+                                quantity=size
+                            )
+                    elif self.client: # spot
+                        self.client.create_order(
+                            symbol=symbol,
+                            side=Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY,
+                            type=Client.ORDER_TYPE_MARKET,
+                            quantity=size
+                        )
+                except Exception as e:
+                    self.log_message(f"[{symbol}] Failed to execute close order on exchange: {e}", "error")
+            
             self.paper_balance += pnl
             self.close_trade(symbol, exit_price, pnl, "LIQ")
             
