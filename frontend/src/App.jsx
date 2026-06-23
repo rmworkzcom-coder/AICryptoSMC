@@ -189,6 +189,7 @@ export default function App() {
   const [latestPrice, setLatestPrice] = useState(0.0);
   const [latestTrend, setLatestTrend] = useState('neutral');
   const [logs, setLogs] = useState([]);
+  const [apiError, setApiError] = useState(null);
   
   // Configuration State
   const [config, setConfig] = useState({
@@ -262,6 +263,13 @@ export default function App() {
     }
   };
 
+  // Request notification permission on load
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
   useEffect(() => {
     scrollToBottom();
   }, [logs]);
@@ -291,6 +299,27 @@ export default function App() {
         }
       } else if (msg.type === 'log') {
         setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
+        
+        // Parse critical connection/authentication errors
+        const msgText = msg.data.message || '';
+        if (msg.data.level === 'ERROR' && (
+          msgText.includes('401') || 
+          msgText.includes('Unauthorized') || 
+          msgText.includes('-2015') || 
+          msgText.includes('Invalid API-key')
+        )) {
+          setApiError(msgText);
+          if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+              new Notification('⚠️ AICryptoSMC Critical API Error', {
+                body: msgText,
+                icon: '/favicon.svg'
+              });
+            } catch (err) {
+              console.error("Failed to show push notification", err);
+            }
+          }
+        }
       }
     };
 
@@ -455,6 +484,44 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Critical API Error Banner */}
+      {apiError && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.2)',
+          borderBottom: '1px solid rgba(239, 68, 68, 0.4)',
+          padding: '12px 40px',
+          color: '#fca5a5',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          fontSize: '0.9rem',
+          backdropFilter: 'blur(10px)',
+          animation: 'fadeIn 0.3s ease'
+        }}>
+          <ShieldAlert size={18} style={{ color: 'var(--bearish)' }} />
+          <div style={{ flexGrow: 1 }}>
+            <strong>Critical API Connection Failure:</strong> {apiError}. The bot is unable to query your balance or submit trades. Please check your API credentials or whitelisted IP settings on Binance.
+          </div>
+          <button 
+            onClick={() => setApiError(null)} 
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: 'none',
+              borderRadius: '4px',
+              padding: '4px 8px',
+              color: 'white',
+              fontSize: '0.8rem',
+              cursor: 'pointer',
+              transition: 'background 0.2s'
+            }}
+            onMouseOver={e => e.target.style.background = 'rgba(255, 255, 255, 0.2)'}
+            onMouseOut={e => e.target.style.background = 'rgba(255, 255, 255, 0.1)'}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main style={styles.mainContent}>

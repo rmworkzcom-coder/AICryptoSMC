@@ -147,7 +147,7 @@ def get_status():
         "selected_symbol": selected_symbol,
         "timeframe": trader.config.get("timeframe"),
         "paper_balance": trader.get_live_balance(),
-        "active_trades": trader.active_trades,
+        "active_trades": trader.get_exchange_positions(),
         "active_trade": trader.active_trade,  # legacy support
         "latest_price": latest_close,
         "latest_trend": latest_trend,
@@ -157,7 +157,7 @@ def get_status():
 @app.get("/trades")
 async def get_trades():
     return {
-        "active_trades": trader.active_trades,
+        "active_trades": trader.get_exchange_positions(),
         "active_trade": trader.active_trade,  # legacy support
         "trade_history": trader.trade_history,
         "paper_balance": trader.get_live_balance()

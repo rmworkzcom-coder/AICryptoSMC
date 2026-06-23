@@ -67,6 +67,35 @@ def calculate_smc(df: pd.DataFrame, N: int = 2, X_impulse: float = 2.0, M_range:
     df['avg_high_wick'] = df['high_wick'].rolling(window=10).mean()
     df['avg_low_wick'] = df['low_wick'].rolling(window=10).mean()
 
+    # Calculate ADX (Average Directional Index) - 14 period
+    try:
+        tr1 = df['high'] - df['low']
+        tr2 = (df['high'] - df['close'].shift(1)).abs()
+        tr3 = (df['low'] - df['close'].shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        up_move = df['high'] - df['high'].shift(1)
+        down_move = df['low'].shift(1) - df['low']
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        
+        period = 14
+        tr_smooth = tr.rolling(window=period).sum()
+        plus_dm_smooth = pd.Series(plus_dm).rolling(window=period).sum()
+        minus_dm_smooth = pd.Series(minus_dm).rolling(window=period).sum()
+        
+        plus_di = 100 * (plus_dm_smooth / tr_smooth)
+        minus_di = 100 * (minus_dm_smooth / tr_smooth)
+        
+        di_sum = plus_di + minus_di
+        di_diff = (plus_di - minus_di).abs()
+        dx = 100 * np.where(di_sum > 0, di_diff / di_sum, 0.0)
+        
+        df['adx'] = pd.Series(dx).rolling(window=period).mean().fillna(0.0)
+    except Exception as adx_err:
+        df['adx'] = 0.0
+
     # Trackers for structure
     trend = "neutral"
     last_sh_idx = -1

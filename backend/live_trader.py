@@ -462,6 +462,101 @@ class LiveTrader:
             
         return self.paper_balance
 
+    def get_exchange_positions(self) -> Dict[str, Dict]:
+        """
+        Retrieves actual open positions from the exchange (Binance Portfolio Margin or Futures).
+        """
+        trading_mode = self.config.get("trading_mode", "paper")
+        if trading_mode != "live":
+            return self.active_trades
+            
+        portfolio_margin = self.config.get("portfolio_margin", False)
+        exchange_positions = {}
+        
+        try:
+            positions_raw = []
+            if portfolio_margin:
+                res = self._make_papi_request("GET", "/papi/v1/um/positionRisk")
+                if isinstance(res, list):
+                    positions_raw = res
+            else:
+                if self.client:
+                    market_type = self.config.get("market_type", "futures")
+                    if market_type == "futures":
+                        positions_raw = self.client.futures_position_information()
+                        
+            # Parse raw positions
+            for pos in positions_raw:
+                symbol = pos.get('symbol')
+                position_amt = float(pos.get('positionAmt', 0.0) or pos.get('positionAmount', 0.0) or 0.0)
+                if position_amt != 0.0:
+                    entry_price = float(pos.get('entryPrice', 0.0) or 0.0)
+                    side = 'long' if position_amt > 0 else 'short'
+                    size = abs(position_amt)
+                    
+                    sl = 0.0
+                    tp = 0.0
+                    entry_time = int(time.time() * 1000)
+                    risk_amount = 0.0
+                    
+                    if symbol in self.active_trades:
+                        local_trade = self.active_trades[symbol]
+                        sl = local_trade.get('sl', 0.0)
+                        tp = local_trade.get('tp', 0.0)
+                        entry_time = local_trade.get('entry_time', entry_time)
+                        risk_amount = local_trade.get('risk_amount', 0.0)
+                    
+                    exchange_positions[symbol] = {
+                        'symbol': symbol,
+                        'type': side,
+                        'entry_price': entry_price,
+                        'sl': sl,
+                        'tp': tp,
+                        'size': size,
+                        'risk_amount': risk_amount,
+                        'entry_time': entry_time,
+                        'live': True
+                    }
+                    
+            if isinstance(positions_raw, list):
+                self.active_trades = exchange_positions
+                self.save_trades()
+                
+        except Exception as e:
+            logger.error(f"Error fetching live exchange positions: {e}")
+            
+        return self.active_trades
+
+    def check_daily_drawdown(self) -> bool:
+        """
+        Calculates the net realized PnL of all trades closed today.
+        Returns True if the drawdown exceeds the daily drawdown limit.
+        """
+        limit_pct = self.config.get("daily_drawdown_limit_pct", 0.0)
+        if limit_pct <= 0.0:
+            return False
+            
+        from datetime import datetime, time as dt_time
+        now = datetime.now()
+        start_of_today = datetime.combine(now.date(), dt_time.min)
+        start_of_today_ms = int(start_of_today.timestamp() * 1000)
+        
+        daily_pnl = 0.0
+        for t in self.trade_history:
+            exit_time = t.get('exit_time', 0)
+            if exit_time >= start_of_today_ms:
+                daily_pnl += t.get('pnl', 0.0)
+                
+        start_of_day_balance = self.paper_balance - daily_pnl
+        if start_of_day_balance <= 0:
+            start_of_day_balance = DEFAULT_INITIAL_BALANCE
+            
+        if daily_pnl < 0:
+            drawdown_pct = (-daily_pnl / start_of_day_balance) * 100.0
+            if drawdown_pct >= limit_pct:
+                return True
+        return False
+
     async def fetch_all_klines(self, symbols: List[str]) -> Dict[str, pd.DataFrame]:
         """Fetch historical klines for multiple symbols concurrently."""
         tasks = [self.fetch_klines_for_symbol(symbol) for symbol in symbols]
@@ -715,6 +810,80 @@ class LiveTrader:
             size = trade['size']
             entry_price = trade['entry_price']
             
+            # Update Peak Price for Trailing Stop
+            peak_price = trade.get('peak_price', entry_price)
+            if trade_type == 'long':
+                trade['peak_price'] = max(peak_price, current_high)
+            elif trade_type == 'short':
+                trade['peak_price'] = min(peak_price, current_low)
+            peak_price = trade['peak_price']
+            
+            # Trailing Stop Loss Adjustment
+            trailing_activation = self.config.get("trailing_stop_activation_pct", 0.0)
+            trailing_distance = self.config.get("trailing_stop_distance_pct", 0.0)
+            
+            if trailing_activation > 0.0 and trailing_distance > 0.0:
+                if trade_type == 'long':
+                    profit_pct = ((peak_price - entry_price) / entry_price) * 100.0
+                    if profit_pct >= trailing_activation:
+                        trail_sl = peak_price * (1.0 - (trailing_distance / 100.0))
+                        if trail_sl > sl:
+                            trade['sl'] = trail_sl
+                            self.log_message(f"[{symbol}] Trailing Stop Loss moved up to {trail_sl:.4f}")
+                            self.save_trades()
+                elif trade_type == 'short':
+                    profit_pct = ((entry_price - peak_price) / entry_price) * 100.0
+                    if profit_pct >= trailing_activation:
+                        trail_sl = peak_price * (1.0 + (trailing_distance / 100.0))
+                        if sl == 0.0 or trail_sl < sl:
+                            trade['sl'] = trail_sl
+                            self.log_message(f"[{symbol}] Trailing Stop Loss moved down to {trail_sl:.4f}")
+                            self.save_trades()
+
+            # Opposing Sweep Exit
+            opposing_sweep_enabled = self.config.get("opposing_sweep_exit_enabled", False)
+            if opposing_sweep_enabled and is_new_candle and len(df) > 2:
+                closed_idx = len(df) - 2
+                sweeps = smc_res.get('liquidity_grabs', [])
+                sweep = next((sw for sw in sweeps if sw['idx'] == closed_idx), None)
+                if sweep:
+                    sweep_type = sweep['type']
+                    if trade_type == 'long' and sweep_type == 'bearish_sweep':
+                        self.log_message(f"[{symbol}] Opposing Bearish Sweep detected at {current_price}. Exiting LONG trade early.")
+                        pnl = (current_price - entry_price) * size
+                        self.paper_balance += pnl
+                        self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
+                        return
+                    elif trade_type == 'short' and sweep_type == 'bullish_sweep':
+                        self.log_message(f"[{symbol}] Opposing Bullish Sweep detected at {current_price}. Exiting SHORT trade early.")
+                        pnl = (entry_price - current_price) * size
+                        self.paper_balance += pnl
+                        self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
+                        return
+
+            # Momentum Stall Exit
+            stall_candles = self.config.get("stall_exit_candles", 0)
+            stall_min_move = self.config.get("stall_exit_min_move_pct", 0.0)
+            if stall_candles > 0 and len(df) > stall_candles:
+                entry_candle_idx = trade.get('entry_candle_idx', len(df) - 1)
+                current_idx = len(df) - 1
+                if current_idx - entry_candle_idx >= stall_candles:
+                    last_candles = df.iloc[-stall_candles:]
+                    price_min = last_candles['low'].min()
+                    price_max = last_candles['high'].max()
+                    range_pct = ((price_max - price_min) / price_min) * 100.0
+                    vol_declining = last_candles['volume'].iloc[-1] < last_candles['volume'].mean()
+                    
+                    if range_pct < stall_min_move and vol_declining:
+                        self.log_message(f"[{symbol}] Momentum stall detected (range {range_pct:.2f}% < {stall_min_move}%, low volume). Exiting trade early.")
+                        if trade_type == 'long':
+                            pnl = (current_price - entry_price) * size
+                        else:
+                            pnl = (entry_price - current_price) * size
+                        self.paper_balance += pnl
+                        self.close_trade(symbol, current_price, pnl, "STALL")
+                        return
+
             # Breakeven Adjustment
             breakeven_trigger = self.config.get("breakeven_trigger", 1.0)
             if not trade.get("breakeven_set", False) and breakeven_trigger > 0:
@@ -736,26 +905,26 @@ class LiveTrader:
 
             # Check if hit SL or TP
             if trade_type == 'long':
-                if current_low <= sl:
+                if sl > 0.0 and current_low <= sl:
                     # SL Hit
                     pnl = (sl - entry_price) * size
                     self.paper_balance += pnl
                     self.log_message(f"[{symbol}] LONG Trade SL Hit! Exit price: {sl}, PnL: {pnl:.2f} USD")
                     self.close_trade(symbol, sl, pnl, "SL" if pnl < 0 else "BE")
-                elif current_high >= tp:
+                elif tp > 0.0 and current_high >= tp:
                     # TP Hit
                     pnl = (tp - entry_price) * size
                     self.paper_balance += pnl
                     self.log_message(f"[{symbol}] LONG Trade TP Hit! Exit price: {tp}, PnL: {pnl:.2f} USD")
                     self.close_trade(symbol, tp, pnl, "TP")
             elif trade_type == 'short':
-                if current_high >= sl:
+                if sl > 0.0 and current_high >= sl:
                     # SL Hit
                     pnl = (entry_price - sl) * size
                     self.paper_balance += pnl
                     self.log_message(f"[{symbol}] SHORT Trade SL Hit! Exit price: {sl}, PnL: {pnl:.2f} USD")
                     self.close_trade(symbol, sl, pnl, "SL" if pnl < 0 else "BE")
-                elif current_low <= tp:
+                elif tp > 0.0 and current_low <= tp:
                     # TP Hit
                     pnl = (entry_price - tp) * size
                     self.paper_balance += pnl
@@ -764,6 +933,10 @@ class LiveTrader:
                     
         # 2. Check for entry triggers on new candle close
         elif is_new_candle and len(df) > 2:
+            if self.check_daily_drawdown():
+                self.log_message(f"[{symbol}] Daily drawdown limit reached. Skipping trade entry.", "warning")
+                return
+
             max_active = self.config.get("max_active_trades", 5)
             if len(self.active_trades) >= max_active:
                 # Max concurrent positions limit reached
@@ -772,6 +945,14 @@ class LiveTrader:
             # We look at the candle that just closed (index -2) to find sweeps & zones
             closed_idx = len(df) - 2
             closed_candle = df.iloc[closed_idx]
+            
+            # Check ADX filter
+            adx_threshold = self.config.get("adx_threshold", 0.0)
+            if adx_threshold > 0.0:
+                candle_adx = closed_candle.get('adx', 0.0)
+                if candle_adx < adx_threshold:
+                    return
+
             closed_time = int(closed_candle['timestamp'])
             current_trend = closed_candle['trend']
             
@@ -808,7 +989,7 @@ class LiveTrader:
                             size = risk_usd / risk_per_share
                             take_profit = entry_price + (rr_ratio * risk_per_share)
                             
-                            self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time)
+                            self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
 
                 # SHORT setup check
                 elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep':
@@ -834,7 +1015,7 @@ class LiveTrader:
                             size = risk_usd / risk_per_share
                             take_profit = entry_price - (rr_ratio * risk_per_share)
                             
-                            self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time)
+                            self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
 
     def get_symbol_precision(self, symbol: str, market_type: str = "futures") -> Tuple[int, int]:
         try:
@@ -871,7 +1052,7 @@ class LiveTrader:
             logger.error(f"Error fetching symbol precision: {e}")
         return 2, 4
 
-    def open_trade(self, symbol: str, trade_type: str, entry_price: float, sl: float, tp: float, size: float, risk_usd: float, entry_time: int):
+    def open_trade(self, symbol: str, trade_type: str, entry_price: float, sl: float, tp: float, size: float, risk_usd: float, entry_time: int, entry_candle_idx: int = 0):
         market_type = self.config.get("market_type", "futures")
         trading_mode = self.config.get("trading_mode", "paper")
         
@@ -884,7 +1065,9 @@ class LiveTrader:
             'tp': tp,
             'size': size,
             'risk_amount': risk_usd,
-            'breakeven_set': False
+            'breakeven_set': False,
+            'peak_price': entry_price,
+            'entry_candle_idx': entry_candle_idx
         }
         self.active_trades[symbol] = trade_details
         
