@@ -980,7 +980,9 @@ class LiveTrader:
                                 
                     if matching_zone:
                         entry_price = float(closed_candle['close'])
-                        stop_loss = sweep_low - (entry_price * 0.0005)
+                        min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
+                        raw_stop = sweep_low - (entry_price * 0.001)
+                        stop_loss = min(raw_stop, entry_price - min_stop_dist)
                         risk_per_share = entry_price - stop_loss
                         
                         if risk_per_share > 0:
@@ -1006,7 +1008,9 @@ class LiveTrader:
                                 
                     if matching_zone:
                         entry_price = float(closed_candle['close'])
-                        stop_loss = sweep_high + (entry_price * 0.0005)
+                        min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
+                        raw_stop = sweep_high + (entry_price * 0.001)
+                        stop_loss = max(raw_stop, entry_price + min_stop_dist)
                         risk_per_share = stop_loss - entry_price
                         
                         if risk_per_share > 0:
