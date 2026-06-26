@@ -630,9 +630,9 @@ class LiveTrader:
         self.running = True
         self.init_binance_client()
         
-        # Dynamically fetch top liquid symbols if enabled
+        # Dynamically fetch top liquid symbols if enabled without blocking startup
         if self.config.get("dynamic_scan", True):
-            await self.refresh_top_symbols()
+            asyncio.create_task(self.refresh_top_symbols())
             
         self.log_message(f"Starting AICryptoSMC Bot on {len(self.config.get('symbols', ['BTCUSDT']))} symbols...")
         
@@ -744,8 +744,9 @@ class LiveTrader:
                     last_time = self.last_candle_times.get(symbol, 0)
                     is_new_candle = latest_candle_time > last_time
                     
-                    # Run SMC calculations
-                    smc_res = calculate_smc(
+                    # Run SMC calculations off the main event loop
+                    smc_res = await asyncio.to_thread(
+                        calculate_smc,
                         df,
                         N=self.config.get("n_swing", 2),
                         X_impulse=self.config.get("x_impulse", 2.0),
@@ -1241,9 +1242,14 @@ class LiveTrader:
         total_drag_rate = fee_rate + slippage_rate
         drag_amount = (entry_price + exit_price) * size * total_drag_rate
         
-        pnl = raw_pnl - drag_amount
-        self.paper_balance -= drag_amount
-        
+        # For true break-even exits, preserve the BE outcome rather than charging drag
+        if raw_pnl == 0.0:
+            pnl = 0.0
+            drag_amount = 0.0
+        else:
+            pnl = raw_pnl - drag_amount
+            self.paper_balance -= drag_amount
+
         closed_trade = {
             **trade,
             'exit_time': int(time.time() * 1000),

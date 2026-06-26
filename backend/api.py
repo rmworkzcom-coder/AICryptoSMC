@@ -105,8 +105,8 @@ def update_config(cfg: ConfigUpdate):
 async def start_bot():
     if trader.running:
         return {"status": "already running"}
-    await trader.start()
-    return {"status": "started"}
+    asyncio.create_task(trader.start())
+    return {"status": "starting"}
 
 @app.post("/bot/stop")
 async def stop_bot():
