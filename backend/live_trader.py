@@ -901,6 +901,26 @@ class LiveTrader:
                         self.log_message(f"[{symbol}] Moving SL to Breakeven at {entry_price} for Short trade.")
                         self.save_trades()
 
+            # Hard loss cap exit
+            max_trade_loss_pct = self.config.get("max_trade_loss_pct", 0.0)
+            if max_trade_loss_pct > 0.0:
+                if trade_type == 'long':
+                    loss_pct = ((entry_price - current_low) / entry_price) * 100.0
+                    if loss_pct >= max_trade_loss_pct:
+                        pnl = (current_low - entry_price) * size
+                        self.paper_balance += pnl
+                        self.log_message(f"[{symbol}] HARD STOP triggered at {current_low:.8f} after {loss_pct:.2f}% loss. Exiting LONG trade.")
+                        self.close_trade(symbol, current_low, pnl, "HARD_STOP")
+                        return
+                elif trade_type == 'short':
+                    loss_pct = ((current_high - entry_price) / entry_price) * 100.0
+                    if loss_pct >= max_trade_loss_pct:
+                        pnl = (entry_price - current_high) * size
+                        self.paper_balance += pnl
+                        self.log_message(f"[{symbol}] HARD STOP triggered at {current_high:.8f} after {loss_pct:.2f}% loss. Exiting SHORT trade.")
+                        self.close_trade(symbol, current_high, pnl, "HARD_STOP")
+                        return
+
             # Read SL again
             sl = trade['sl']
 
