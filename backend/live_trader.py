@@ -301,6 +301,19 @@ class LiveTrader:
     def update_config(self, new_config: Dict):
         self.config.update(new_config)
         self.save_config()
+
+        if new_config.get("trading_mode") == "live":
+            self.log_message("Live trading selected. Initializing Binance client after config update.", "info")
+            self.init_binance_client()
+        elif new_config.get("trading_mode") == "paper":
+            self.log_message("Paper trading selected. Disabling Binance client if active.", "info")
+            self.client = None
+        elif self.config.get("trading_mode") == "live" and (
+            "binance_api_key" in new_config or "binance_api_secret" in new_config or "testnet" in new_config
+        ):
+            self.log_message("Binance credentials or testnet flag updated while live mode is enabled. Reinitializing client.", "info")
+            self.init_binance_client()
+
         logger.info("Configuration updated.")
 
     def log_message(self, message: str, level: str = "info"):
@@ -324,10 +337,29 @@ class LiveTrader:
             except RuntimeError:
                 pass
 
+    def is_placeholder_key(self, key: Optional[str]) -> bool:
+        if not key:
+            return True
+        normalized = key.strip().lower()
+        return normalized in {
+            "testkey",
+            "testsecret",
+            "your_api_key",
+            "your_api_secret",
+            "replace_me",
+            "xxxxx",
+            "00000",
+            "12345",
+            "null",
+            "none"
+        }
+
     def load_env_keys(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         env_key = os.environ.get("BINANCE_KEY") or os.environ.get("BINANCE_API_KEY")
         env_secret = os.environ.get("BINANCE_SECRET") or os.environ.get("BINANCE_API_SECRET")
-        if env_key and env_secret:
+        if env_key and env_secret and not (
+            self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
+        ):
             logger.info("Loaded Binance API keys from environment variables.")
             return env_key, env_secret, "environment variables"
 
@@ -356,7 +388,9 @@ class LiveTrader:
                                     key = v
                                 elif k in ["BINANCE_SECRET", "BINANCE_API_SECRET"]:
                                     secret = v
-                        if key and secret:
+                        if key and secret and not (
+                            self.is_placeholder_key(key) or self.is_placeholder_key(secret)
+                        ):
                             logger.info(f"Loaded Binance API keys from {path}")
                             return key, secret, path
                 except Exception as e:
@@ -370,6 +404,16 @@ class LiveTrader:
         testnet = self.config.get("testnet", True)
         trading_mode = self.config.get("trading_mode", "paper")
         
+        # Treat fake placeholder values as absent so they don't block valid env/.env keys.
+        if self.is_placeholder_key(api_key) or self.is_placeholder_key(api_secret):
+            if api_key or api_secret:
+                self.log_message(
+                    "Detected placeholder Binance keys in config.json; ignoring them and falling back to environment or .env.",
+                    "warning"
+                )
+            api_key = None
+            api_secret = None
+
         env_key = env_secret = source = None
         if not api_key or not api_secret:
             # Fallback to environment variables or .env file
@@ -378,9 +422,17 @@ class LiveTrader:
                 api_key = env_key
                 api_secret = env_secret
                 self.log_message("Automatically loaded Binance API keys from environment or .env file.")
+                if self.is_placeholder_key(self.config.get("binance_api_key")) or self.is_placeholder_key(self.config.get("binance_api_secret")):
+                    self.config["binance_api_key"] = ""
+                    self.config["binance_api_secret"] = ""
+                    self.save_config()
+                    self.log_message("Removed placeholder Binance credentials from config.json.", "info")
         
         if api_key and api_secret:
-            if self.config.get("binance_api_key") and self.config.get("binance_api_secret"):
+            if self.config.get("binance_api_key") and self.config.get("binance_api_secret") and not (
+                self.is_placeholder_key(self.config.get("binance_api_key")) or
+                self.is_placeholder_key(self.config.get("binance_api_secret"))
+            ):
                 source = "config.json"
             elif source is None:
                 source = "unknown source"
@@ -392,13 +444,21 @@ class LiveTrader:
             except Exception as e:
                 self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "warning")
                 self.client = None
-                if trading_mode == "live" and self._is_api_unauthorized(e):
-                    self.disable_live_mode("Binance client authentication failed during initialization")
+                if trading_mode == "live":
+                    self.log_message(
+                        "Live trading is enabled but Binance client failed to initialize. "
+                        "Please verify API credentials and permissions.",
+                        "warning"
+                    )
                 else:
-                    self.log_message("Live mode remains enabled; Binance client will retry on the next cycle.", "warning")
+                    self.log_message("Live mode is not enabled; operating in paper/public mode.", "info")
         else:
             if trading_mode == "live":
-                self.disable_live_mode("No API keys available for live trading")
+                self.log_message(
+                    "Live trading is enabled but Binance API keys are missing. "
+                    "Please configure keys to enable real orders.",
+                    "warning"
+                )
             else:
                 self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
             self.client = None
@@ -419,6 +479,10 @@ class LiveTrader:
         api_key = self.config.get("binance_api_key")
         api_secret = self.config.get("binance_api_secret")
         
+        if self.is_placeholder_key(api_key) or self.is_placeholder_key(api_secret):
+            api_key = None
+            api_secret = None
+
         if not api_key or not api_secret:
             env_key, env_secret, _ = self.load_env_keys()
             if env_key and env_secret:
@@ -512,7 +576,10 @@ class LiveTrader:
                 self.client.get_asset_balance(asset="USDT")
         except Exception as e:
             if self._is_api_unauthorized(e):
-                self.disable_live_mode("Binance API authentication failed during initial validation")
+                self.log_message(
+                    "Binance API authentication failed during validation. Live mode remains enabled so you can correct credentials or permissions.",
+                    "warning"
+                )
             else:
                 self.log_message(
                     f"Binance client validation failed: {e}. Live mode remains enabled and will retry later.",
@@ -866,10 +933,14 @@ class LiveTrader:
         self.log_message("Bot stopped.")
 
     async def trading_loop(self):
-        sleep_interval = self.config.get("scan_interval_secs", 15)
+        sleep_interval = self.config.get("scan_interval_secs")
+        if sleep_interval is None or not isinstance(sleep_interval, (int, float)) or sleep_interval <= 0:
+            sleep_interval = 15
         if len(self.config.get("symbols", [])) > 100:
             sleep_interval = max(sleep_interval, 30)
-        self.log_message("Entering main execution loop.")
+        self.config["scan_interval_secs"] = sleep_interval
+        self.save_config()
+        self.log_message(f"Entering main execution loop with scan interval={sleep_interval}s.")
         
         while self.running:
             try:

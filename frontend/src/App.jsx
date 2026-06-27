@@ -185,6 +185,9 @@ export default function App() {
   const [scanCount, setScanCount] = useState(0);
   const [scanTotal, setScanTotal] = useState(0);
   const [scanSkipped, setScanSkipped] = useState(0);
+  const [nextScanCountdown, setNextScanCountdown] = useState(15);
+  const scanIntervalSeconds = 15;
+  const [scanLastRunAt, setScanLastRunAt] = useState(Date.now());
   const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   const [tradeHistory, setTradeHistory] = useState([]);
   const [latestPrice, setLatestPrice] = useState(0.0);
@@ -246,10 +249,26 @@ export default function App() {
       const data = await res.json();
       setLiveChartData(data.chart_data);
       setLiveStructures(data.structures);
+      const now = Date.now();
+      setScanLastRunAt(now);
+      setNextScanCountdown(scanIntervalSeconds);
     } catch (e) {
       console.error("Failed to load live chart", e);
     }
   }, [backendProtocol, selectedSymbol]);
+
+  const showNotification = useCallback((title, body) => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(title, {
+          body,
+          icon: '/favicon.svg'
+        });
+      } catch (err) {
+        console.error('Notification failed', err);
+      }
+    }
+  }, []);
 
   const connectWebSocket = useCallback(function connect() {
     const wsUrl = `${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`;
@@ -279,7 +298,6 @@ export default function App() {
       } else if (msg.type === 'log') {
         setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
         
-        // Parse critical connection/authentication errors
         const msgText = msg.data.message || '';
         if (msg.data.level === 'ERROR' && (
           msgText.includes('401') || 
@@ -288,16 +306,18 @@ export default function App() {
           msgText.includes('Invalid API-key')
         )) {
           setApiError(msgText);
-          if ('Notification' in window && Notification.permission === 'granted') {
-            try {
-              new Notification('⚠️ AICryptoSMC Critical API Error', {
-                body: msgText,
-                icon: '/favicon.svg'
-              });
-            } catch (err) {
-              console.error("Failed to show push notification", err);
-            }
-          }
+          showNotification('⚠️ AICryptoSMC API Error', msgText);
+        }
+
+        // Notify on trade open / close messages
+        if (msg.data.level === 'INFO' && (
+          msgText.includes('OPENED') ||
+          msgText.includes('LIQUIDATED') ||
+          msgText.includes('Closed position') ||
+          msgText.includes('Take Profit') ||
+          msgText.includes('Stop Loss')
+        )) {
+          showNotification('📈 AICryptoSMC Trade Alert', msgText);
         }
       }
     };
@@ -382,6 +402,15 @@ export default function App() {
       clearInterval(interval);
     };
   }, [selectedSymbol, connectWebSocket, fetchConfig, fetchTrades, fetchLogs, fetchLiveChart]);
+
+  useEffect(() => {
+    const countdown = setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - scanLastRunAt) / 1000);
+      setNextScanCountdown(Math.max(scanIntervalSeconds - elapsedSeconds, 0));
+    }, 250);
+
+    return () => clearInterval(countdown);
+  }, [scanLastRunAt]);
 
   useEffect(() => {
     scrollToBottom();
@@ -545,6 +574,10 @@ export default function App() {
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Active Positions</span>
             <span style={styles.scanStatusValue}>{Object.keys(activeTrades).length}</span>
+          </div>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Next Scan In</span>
+            <span style={styles.scanStatusValue}>{nextScanCountdown} sec</span>
           </div>
         </div>
       )}
