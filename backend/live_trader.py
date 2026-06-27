@@ -324,7 +324,13 @@ class LiveTrader:
             except RuntimeError:
                 pass
 
-    def load_env_keys(self) -> Tuple[Optional[str], Optional[str]]:
+    def load_env_keys(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        env_key = os.environ.get("BINANCE_KEY") or os.environ.get("BINANCE_API_KEY")
+        env_secret = os.environ.get("BINANCE_SECRET") or os.environ.get("BINANCE_API_SECRET")
+        if env_key and env_secret:
+            logger.info("Loaded Binance API keys from environment variables.")
+            return env_key, env_secret, "environment variables"
+
         search_paths = [
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env.local"),
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"),
@@ -352,11 +358,11 @@ class LiveTrader:
                                     secret = v
                         if key and secret:
                             logger.info(f"Loaded Binance API keys from {path}")
-                            return key, secret
+                            return key, secret, path
                 except Exception as e:
                     logger.error(f"Error reading env file at {path}: {e}")
-        logger.info("No Binance API keys found in .env.local/.env search paths")
-        return None, None
+        logger.info("No Binance API keys found in environment or .env file search paths")
+        return None, None, None
 
     def init_binance_client(self):
         api_key = self.config.get("binance_api_key")
@@ -364,26 +370,32 @@ class LiveTrader:
         testnet = self.config.get("testnet", True)
         trading_mode = self.config.get("trading_mode", "paper")
         
+        env_key = env_secret = source = None
         if not api_key or not api_secret:
-            # Fallback to .env.local
-            env_key, env_secret = self.load_env_keys()
+            # Fallback to environment variables or .env file
+            env_key, env_secret, source = self.load_env_keys()
             if env_key and env_secret:
                 api_key = env_key
                 api_secret = env_secret
-                self.log_message("Automatically loaded Binance API keys from .env.local file.")
+                self.log_message("Automatically loaded Binance API keys from environment or .env file.")
         
         if api_key and api_secret:
-            source = "config.json" if self.config.get("binance_api_key") and self.config.get("binance_api_secret") else "env file"
+            if self.config.get("binance_api_key") and self.config.get("binance_api_secret"):
+                source = "config.json"
+            elif source is None:
+                source = "unknown source"
             self.log_message(f"Initializing Binance client with keys loaded from {source}.")
             try:
                 self.client = Client(api_key, api_secret, testnet=testnet, requests_params={"timeout": 10})
                 self.log_message("Binance Client initialized successfully.")
                 self.verify_binance_connection()
             except Exception as e:
-                self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "error")
+                self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "warning")
                 self.client = None
-                if trading_mode == "live":
-                    self.disable_live_mode("Binance client initialization failed")
+                if trading_mode == "live" and self._is_api_unauthorized(e):
+                    self.disable_live_mode("Binance client authentication failed during initialization")
+                else:
+                    self.log_message("Live mode remains enabled; Binance client will retry on the next cycle.", "warning")
         else:
             if trading_mode == "live":
                 self.disable_live_mode("No API keys available for live trading")
@@ -408,7 +420,7 @@ class LiveTrader:
         api_secret = self.config.get("binance_api_secret")
         
         if not api_key or not api_secret:
-            env_key, env_secret = self.load_env_keys()
+            env_key, env_secret, _ = self.load_env_keys()
             if env_key and env_secret:
                 api_key = env_key
                 api_secret = env_secret
@@ -482,7 +494,10 @@ class LiveTrader:
             return
 
         if not self.client:
-            self.disable_live_mode("Binance client is not initialized for live trading")
+            self.log_message(
+                "Binance client is not initialized for live trading. Live mode remains enabled and will retry later.",
+                "warning"
+            )
             return
 
         market_type = self.config.get("market_type", "futures")
@@ -499,7 +514,10 @@ class LiveTrader:
             if self._is_api_unauthorized(e):
                 self.disable_live_mode("Binance API authentication failed during initial validation")
             else:
-                self.log_message(f"Binance client validation failed: {e}", "warning")
+                self.log_message(
+                    f"Binance client validation failed: {e}. Live mode remains enabled and will retry later.",
+                    "warning"
+                )
 
     def get_live_balance(self) -> float:
         trading_mode = self.config.get("trading_mode", "paper")
@@ -543,7 +561,10 @@ class LiveTrader:
                         return float(b['free']) + float(b['locked'])
         except Exception as e:
             if self._is_api_unauthorized(e):
-                self.disable_live_mode("Binance API unauthorized while fetching live balance")
+                self.log_message(
+                    "Binance API unauthorized while fetching live balance. Live mode remains enabled so user can correct credentials or permissions.",
+                    "warning"
+                )
                 return self.paper_balance
             logger.error(f"Error fetching live Binance balance: {e}")
         
@@ -620,7 +641,10 @@ class LiveTrader:
                 
         except Exception as e:
             if self._is_api_unauthorized(e):
-                self.disable_live_mode("Binance API unauthorized while fetching live positions")
+                self.log_message(
+                    "Binance API unauthorized while fetching live positions. Live mode remains enabled so user can correct credentials or permissions.",
+                    "warning"
+                )
                 return self.active_trades
             logger.error(f"Error fetching live exchange positions: {e}")
             
