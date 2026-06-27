@@ -23,7 +23,7 @@
   "max_trade_loss_pct": 0.0,
   "running": true,
   "max_active_trades": 4,
-  "selected_symbol": "ETHUSDT",
+  "selected_symbol": "BTCUSDT",
   "dynamic_scan": true,
   "max_scanned_coins": 350,
   "symbols": [
