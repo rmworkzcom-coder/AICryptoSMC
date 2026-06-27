@@ -527,6 +527,20 @@ class LiveTrader:
             
         return self.active_trades
 
+    def has_recent_structure(self, smc_res: Dict, current_idx: int, direction: str, lookback: int = 3) -> bool:
+        """
+        Returns True if a recent bullish/bearish BOS or CHoCH occurred within the lookback window.
+        """
+        structures = []
+        structures.extend(smc_res.get('bos', []))
+        structures.extend(smc_res.get('choch', []))
+        for struct in structures:
+            if struct.get('type') == direction:
+                idx = int(struct.get('idx', -999))
+                if current_idx - lookback <= idx <= current_idx:
+                    return True
+        return False
+
     def check_daily_drawdown(self) -> bool:
         """
         Calculates the net realized PnL of all trades closed today.
@@ -987,7 +1001,7 @@ class LiveTrader:
                 risk_pct = self.config.get("risk_pct", 1.0)
                 
                 # LONG setup check
-                if current_trend == 'uptrend' and sweep_type == 'bullish_sweep':
+                if current_trend == 'uptrend' and sweep_type == 'bullish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bullish'):
                     sweep_low = sweep['wick_low']
                     demand_zones = [z for z in smc_res['demand_zones'] if z.get('active', True)]
                     matching_zone = None
@@ -1015,7 +1029,7 @@ class LiveTrader:
                             self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
 
                 # SHORT setup check
-                elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep':
+                elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bearish'):
                     sweep_high = sweep['wick_high']
                     supply_zones = [z for z in smc_res['supply_zones'] if z.get('active', True)]
                     matching_zone = None
@@ -1251,17 +1265,19 @@ class LiveTrader:
     def close_trade(self, symbol: str, exit_price: float, raw_pnl: float, status: str):
         if symbol not in self.active_trades:
             return
-            
+
         trade = self.active_trades[symbol]
         entry_price = trade['entry_price']
         size = trade['size']
-        
+        market_type = self.config.get("market_type", "futures")
+        trading_mode = self.config.get("trading_mode", "paper")
+
         # Calculate realistic transaction fees (0.04% taker) and slippage (0.02%) per side
         fee_rate = 0.0004
         slippage_rate = 0.0002
         total_drag_rate = fee_rate + slippage_rate
         drag_amount = (entry_price + exit_price) * size * total_drag_rate
-        
+
         # For true break-even exits, preserve the BE outcome rather than charging drag
         if raw_pnl == 0.0:
             pnl = 0.0
@@ -1270,28 +1286,30 @@ class LiveTrader:
             pnl = raw_pnl - drag_amount
             self.paper_balance -= drag_amount
 
+        peak_price = trade.get('peak_price', entry_price)
+        if trade['type'] == 'long':
+            peak_pnl = (peak_price - entry_price) * size
+        else:
+            peak_pnl = (entry_price - peak_price) * size
+        regret_pnl = peak_pnl - pnl
+
         closed_trade = {
             **trade,
             'exit_time': int(time.time() * 1000),
             'exit_price': exit_price,
             'pnl': pnl,
+            'peak_pnl': peak_pnl,
+            'regret_pnl': regret_pnl,
             'status': status
         }
-        
-        market_type = self.config.get("market_type", "futures")
-        trading_mode = self.config.get("trading_mode", "paper")
-        
+
         self.trade_history.append(closed_trade)
         del self.active_trades[symbol]
         self.save_trades()
-        self.log_message(f"[{symbol}] CLOSED Trade. PnL: {pnl:.2f} USD. Account Balance: {self.paper_balance:.2f} USD")
-        if self.websocket_broadcast_callback:
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.broadcast_current_state())
-            except Exception:
-                pass
-        
+        self.log_message(
+            f"[{symbol}] CLOSED Trade. PnL: {pnl:.2f} USD. Regret: {regret_pnl:.2f} USD. Account Balance: {self.paper_balance:.2f} USD"
+        )
+
         if trading_mode == "live":
             try:
                 if market_type == "futures":
@@ -1302,7 +1320,7 @@ class LiveTrader:
                             self._make_papi_request("DELETE", "/papi/v1/um/allOpenOrders", {"symbol": symbol})
                         except Exception as e:
                             self.log_message(f"[{symbol}] [PAPI] Failed to cancel limit orders (possibly none open): {e}", "info")
-                        
+
                         self.log_message(f"[{symbol}] [PAPI] Cancelling any open algo orders for this symbol on Futures...")
                         try:
                             self._make_papi_request("DELETE", "/papi/v1/um/algo/allOpenOrders", {"symbol": symbol})
