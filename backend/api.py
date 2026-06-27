@@ -42,6 +42,7 @@ app.add_middleware(
 # Shared LiveTrader instance
 config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 trader = LiveTrader(config_path)
+trader.log_message(f"Backend startup: trading_mode={trader.config.get('trading_mode')} portfolio_margin={trader.config.get('portfolio_margin')} testnet={trader.config.get('testnet')}")
 
 # Active WebSocket connections
 connected_websockets: List[WebSocket] = []

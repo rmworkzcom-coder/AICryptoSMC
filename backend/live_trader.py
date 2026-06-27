@@ -343,9 +343,11 @@ class LiveTrader:
                                 elif k in ["BINANCE_SECRET", "BINANCE_API_SECRET"]:
                                     secret = v
                         if key and secret:
+                            logger.info(f"Loaded Binance API keys from {path}")
                             return key, secret
                 except Exception as e:
                     logger.error(f"Error reading env file at {path}: {e}")
+        logger.info("No Binance API keys found in .env.local/.env search paths")
         return None, None
 
     def init_binance_client(self):
@@ -362,6 +364,8 @@ class LiveTrader:
                 self.log_message("Automatically loaded Binance API keys from .env.local file.")
         
         if api_key and api_secret:
+            source = "config.json" if self.config.get("binance_api_key") and self.config.get("binance_api_secret") else "env file"
+            self.log_message(f"Initializing Binance client with keys loaded from {source}.")
             try:
                 self.client = Client(api_key, api_secret, testnet=testnet, requests_params={"timeout": 10})
                 self.log_message("Binance Client initialized successfully.")
@@ -572,14 +576,25 @@ class LiveTrader:
         return False
 
     async def fetch_all_klines(self, symbols: List[str]) -> Dict[str, pd.DataFrame]:
-        """Fetch historical klines for multiple symbols concurrently."""
-        tasks = [self.fetch_klines_for_symbol(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks)
-        return {symbol: df for symbol, df in zip(symbols, results) if df is not None}
+        """Fetch historical klines for multiple symbols in controlled batches."""
+        max_concurrency = min(self.config.get("max_fetch_concurrency", 10), len(symbols))
+        batch_delay = self.config.get("fetch_batch_delay", 2)
+        semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def fetch_klines_for_symbol(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch klines wrapped in a background thread."""
-        return await asyncio.to_thread(self._fetch_klines_sync, symbol)
+        results = {}
+        for start in range(0, len(symbols), max_concurrency):
+            batch = symbols[start:start + max_concurrency]
+            tasks = [self.fetch_klines_for_symbol(symbol, semaphore) for symbol in batch]
+            batch_results = await asyncio.gather(*tasks)
+            results.update({symbol: df for symbol, df in zip(batch, batch_results) if df is not None})
+            if start + max_concurrency < len(symbols):
+                await asyncio.sleep(batch_delay)
+        return results
+
+    async def fetch_klines_for_symbol(self, symbol: str, semaphore: asyncio.Semaphore) -> Optional[pd.DataFrame]:
+        """Fetch klines wrapped in a background thread with concurrency control."""
+        async with semaphore:
+            return await asyncio.to_thread(self._fetch_klines_sync, symbol)
 
     def _fetch_klines_sync(self, symbol: str) -> Optional[pd.DataFrame]:
         timeframe = self.config.get("timeframe", "15m")
@@ -611,25 +626,14 @@ class LiveTrader:
                 else:
                     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
 
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 klines = response.json()
                 return self.parse_klines(klines)
-        except Exception:
-            pass
-            
-        return None
-
-    def parse_klines(self, klines: List) -> pd.DataFrame:
-        data = []
-        for k in klines:
-            data.append({
-                'timestamp': int(k[0]),
-                'open': float(k[1]),
-                'high': float(k[2]),
-                'low': float(k[3]),
-                'close': float(k[4]),
-                'volume': float(k[5])
+            logger.warning(f"Failed to fetch klines for {symbol}: {response.status_code} {response.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch klines for {symbol} via public endpoint: {e}")
+            return None
             })
         return pd.DataFrame(data)
 
@@ -719,7 +723,9 @@ class LiveTrader:
         self.log_message("Bot stopped.")
 
     async def trading_loop(self):
-        sleep_interval = 15  # check every 15 seconds
+        sleep_interval = self.config.get("scan_interval_secs", 15)
+        if len(self.config.get("symbols", [])) > 100:
+            sleep_interval = max(sleep_interval, 30)
         self.log_message("Entering main execution loop.")
         
         while self.running:
