@@ -523,24 +523,27 @@ export default function App() {
         </div>
       )}
 
+      {activeTab === 'live' && (
+        <div style={styles.scanStatusBarTop}>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Scan Progress</span>
+            <span style={styles.scanStatusValue}>{Object.keys(scannedSymbolsStatus).length} / {config.symbols?.length ?? Object.keys(scannedSymbolsStatus).length}</span>
+            <div style={styles.scanProgressTrack}>
+              <div style={{ ...styles.scanProgressFill, width: `${Math.round((Object.keys(scannedSymbolsStatus).length / (config.symbols?.length || 1)) * 100)}%` }} />
+            </div>
+          </div>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Active Positions</span>
+            <span style={styles.scanStatusValue}>{Object.keys(activeTrades).length}</span>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <main style={styles.mainContent}>
         {activeTab === 'live' ? (
           /* LIVE TRADING TAB */
           <>
-            <div style={styles.scanStatusBar}>
-              <div style={styles.scanStatusItem}>
-                <span style={styles.scanStatusLabel}>Scan Progress</span>
-                <span style={styles.scanStatusValue}>{Object.keys(scannedSymbolsStatus).length} / {config.symbols?.length ?? Object.keys(scannedSymbolsStatus).length}</span>
-                <div style={styles.scanProgressTrack}>
-                  <div style={{ ...styles.scanProgressFill, width: `${Math.round((Object.keys(scannedSymbolsStatus).length / (config.symbols?.length || 1)) * 100)}%` }} />
-                </div>
-              </div>
-              <div style={styles.scanStatusItem}>
-                <span style={styles.scanStatusLabel}>Active Positions</span>
-                <span style={styles.scanStatusValue}>{Object.keys(activeTrades).length}</span>
-              </div>
-            </div>
             <div style={styles.dashboardGrid}>
             
             {/* Column 1: Scanned Coins Sidebar */}
@@ -1842,6 +1845,18 @@ const styles = {
   },
   actionButtons: {
     marginTop: '20px',
+  },
+  scanStatusBarTop: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '18px',
+    padding: '16px 20px',
+    borderRadius: '16px',
+    margin: '20px 40px 0',
+    background: 'rgba(15, 23, 42, 0.95)',
+    border: '1px solid rgba(148, 163, 184, 0.16)',
+    alignItems: 'center',
+    boxShadow: '0 14px 40px rgba(0, 0, 0, 0.18)',
   },
   scanStatusBar: {
     display: 'flex',
