@@ -527,7 +527,21 @@ export default function App() {
       <main style={styles.mainContent}>
         {activeTab === 'live' ? (
           /* LIVE TRADING TAB */
-          <div style={styles.dashboardGrid}>
+          <>
+            <div style={styles.scanStatusBar}>
+              <div style={styles.scanStatusItem}>
+                <span style={styles.scanStatusLabel}>Scan Progress</span>
+                <span style={styles.scanStatusValue}>{Object.keys(scannedSymbolsStatus).length} / {config.symbols?.length ?? Object.keys(scannedSymbolsStatus).length}</span>
+                <div style={styles.scanProgressTrack}>
+                  <div style={{ ...styles.scanProgressFill, width: `${Math.round((Object.keys(scannedSymbolsStatus).length / (config.symbols?.length || 1)) * 100)}%` }} />
+                </div>
+              </div>
+              <div style={styles.scanStatusItem}>
+                <span style={styles.scanStatusLabel}>Active Positions</span>
+                <span style={styles.scanStatusValue}>{Object.keys(activeTrades).length}</span>
+              </div>
+            </div>
+            <div style={styles.dashboardGrid}>
             
             {/* Column 1: Scanned Coins Sidebar */}
             <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '15px', maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
@@ -888,6 +902,7 @@ export default function App() {
             </div>
 
           </div>
+          </>
         ) : activeTab === 'history' ? (
           /* TRADING HISTORY TAB */
           <TradingHistoryView 
@@ -1112,10 +1127,10 @@ export default function App() {
                                   {trade.type.toUpperCase()}
                                 </span>
                               </td>
-                              <td style={styles.td}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
-                              <td style={styles.td}>${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
-                              <td style={styles.td}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
-                              <td style={styles.td}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</td>
+                              <td style={styles.td}>{`$${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
+                              <td style={styles.td}>{`$${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
+                              <td style={styles.td}>{`$${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
+                              <td style={styles.td}>{`$${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
                               <td style={{ 
                                 ...styles.td, 
                                 color: trade.pnl >= 0 ? 'var(--bullish)' : 'var(--bearish)',
@@ -1827,6 +1842,48 @@ const styles = {
   },
   actionButtons: {
     marginTop: '20px',
+  },
+  scanStatusBar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '18px',
+    padding: '16px 20px',
+    borderRadius: '16px',
+    marginBottom: '20px',
+    background: 'rgba(15, 23, 42, 0.85)',
+    border: '1px solid rgba(148, 163, 184, 0.12)',
+    alignItems: 'center',
+  },
+  scanStatusItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    minWidth: '180px',
+  },
+  scanStatusLabel: {
+    fontSize: '0.75rem',
+    color: 'var(--text-dark)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+  },
+  scanProgressTrack: {
+    width: '100%',
+    height: '8px',
+    borderRadius: '999px',
+    background: 'rgba(255, 255, 255, 0.08)',
+    overflow: 'hidden',
+    marginTop: '6px',
+  },
+  scanProgressFill: {
+    height: '100%',
+    borderRadius: '999px',
+    background: 'linear-gradient(90deg, rgba(16,185,129,1) 0%, rgba(79,70,229,1) 100%)',
+    transition: 'width 0.25s ease',
+  },
+  scanStatusValue: {
+    fontSize: '1.25rem',
+    color: 'var(--text-main)',
+    fontWeight: '700',
   },
   emptyState: {
     display: 'flex',
