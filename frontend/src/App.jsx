@@ -239,7 +239,7 @@ export default function App() {
 
   // Connect WebSockets
   const backendProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
-  const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const websocketProtocol = window.location.protocol === 'https:' || window.location.origin.startsWith('https:') ? 'wss' : 'ws';
 
   useEffect(() => {
     connectWebSocket();
@@ -281,7 +281,8 @@ export default function App() {
   }, [logs]);
 
   const connectWebSocket = () => {
-    const ws = new WebSocket(`${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`);
+    const wsUrl = `${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`;
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {

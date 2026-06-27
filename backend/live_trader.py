@@ -1222,40 +1222,48 @@ class LiveTrader:
                         # Portfolio Margin order entry via PAPI
                         side = 'BUY' if trade_type == 'long' else 'SELL'
                         opp_side = 'SELL' if trade_type == 'long' else 'BUY'
-                        
-                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures {trade_type.upper()} Market Order for {qty_str}...")
-                        entry_order = self._make_papi_request("POST", "/papi/v1/um/order", {
-                            "symbol": symbol,
-                            "side": side,
-                            "type": "MARKET",
-                            "quantity": qty_str
-                        })
-                        trade_details['entry_order_id'] = entry_order['orderId']
-                        
-                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Stop Loss Order at {sl_str}...")
-                        sl_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
-                            "symbol": symbol,
-                            "side": opp_side,
-                            "type": "STOP_MARKET",
-                            "algoType": "CONDITIONAL",
-                            "triggerPrice": sl_str,
-                            "quantity": qty_str,
-                            "reduceOnly": "true"
-                        })
-                        trade_details['sl_order_id'] = sl_order.get('algoId')
-                        
-                        self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Take Profit Order at {tp_str}...")
-                        tp_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
-                            "symbol": symbol,
-                            "side": opp_side,
-                            "type": "TAKE_PROFIT_MARKET",
-                            "algoType": "CONDITIONAL",
-                            "triggerPrice": tp_str,
-                            "quantity": qty_str,
-                            "reduceOnly": "true"
-                        })
-                        trade_details['tp_order_id'] = tp_order.get('algoId')
-                    else:
+                        try:
+                            self.log_message(f"[{symbol}] [PAPI] Placing Live Futures {trade_type.upper()} Market Order for {qty_str}...")
+                            entry_order = self._make_papi_request("POST", "/papi/v1/um/order", {
+                                "symbol": symbol,
+                                "side": side,
+                                "type": "MARKET",
+                                "quantity": qty_str
+                            })
+                            trade_details['entry_order_id'] = entry_order['orderId']
+                            
+                            self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Stop Loss Order at {sl_str}...")
+                            sl_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
+                                "symbol": symbol,
+                                "side": opp_side,
+                                "type": "STOP_MARKET",
+                                "algoType": "CONDITIONAL",
+                                "triggerPrice": sl_str,
+                                "quantity": qty_str,
+                                "reduceOnly": "true"
+                            })
+                            trade_details['sl_order_id'] = sl_order.get('algoId')
+                            
+                            self.log_message(f"[{symbol}] [PAPI] Placing Live Futures Take Profit Order at {tp_str}...")
+                            tp_order = self._make_papi_request("POST", "/papi/v1/um/algo/order", {
+                                "symbol": symbol,
+                                "side": opp_side,
+                                "type": "TAKE_PROFIT_MARKET",
+                                "algoType": "CONDITIONAL",
+                                "triggerPrice": tp_str,
+                                "quantity": qty_str,
+                                "reduceOnly": "true"
+                            })
+                            trade_details['tp_order_id'] = tp_order.get('algoId')
+                        except requests.exceptions.HTTPError as e:
+                            if self._is_papi_unauthorized(e):
+                                self.log_message(f"[{symbol}] Portfolio Margin PAPI unauthorized during order entry; falling back to standard futures.", "warning")
+                                self.config["portfolio_margin"] = False
+                                self.save_config()
+                                portfolio_margin = False
+                            else:
+                                raise
+                    if not portfolio_margin:
                         # Standard Futures order entry
                         side = Client.SIDE_BUY if trade_type == 'long' else Client.SIDE_SELL
                         opp_side = Client.SIDE_SELL if trade_type == 'long' else Client.SIDE_BUY
