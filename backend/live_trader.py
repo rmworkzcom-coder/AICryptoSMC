@@ -982,6 +982,7 @@ class LiveTrader:
 
             # Opposing Sweep Exit
             opposing_sweep_enabled = self.config.get("opposing_sweep_exit_enabled", False)
+            opposing_sweep_min_adverse_pct = self.config.get("opposing_sweep_min_adverse_pct", 0.0)
             if opposing_sweep_enabled and is_new_candle and len(df) > 2:
                 closed_idx = len(df) - 2
                 sweeps = smc_res.get('liquidity_grabs', [])
@@ -989,17 +990,33 @@ class LiveTrader:
                 if sweep:
                     sweep_type = sweep['type']
                     if trade_type == 'long' and sweep_type == 'bearish_sweep':
-                        self.log_message(f"[{symbol}] Opposing Bearish Sweep detected at {current_price}. Exiting LONG trade early.")
-                        pnl = (current_price - entry_price) * size
-                        self.paper_balance += pnl
-                        self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
-                        return
+                        adverse_pct = ((entry_price - current_price) / entry_price) * 100.0
+                        if adverse_pct < opposing_sweep_min_adverse_pct:
+                            self.log_message(
+                                f"[{symbol}] Bearish sweep detected but adverse move {adverse_pct:.3f}% is below opposing sweep threshold {opposing_sweep_min_adverse_pct:.3f}%. Holding LONG."
+                            )
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Opposing Bearish Sweep detected at {current_price}. Exiting LONG trade early after {adverse_pct:.3f}% adverse move."
+                            )
+                            pnl = (current_price - entry_price) * size
+                            self.paper_balance += pnl
+                            self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
+                            return
                     elif trade_type == 'short' and sweep_type == 'bullish_sweep':
-                        self.log_message(f"[{symbol}] Opposing Bullish Sweep detected at {current_price}. Exiting SHORT trade early.")
-                        pnl = (entry_price - current_price) * size
-                        self.paper_balance += pnl
-                        self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
-                        return
+                        adverse_pct = ((current_price - entry_price) / entry_price) * 100.0
+                        if adverse_pct < opposing_sweep_min_adverse_pct:
+                            self.log_message(
+                                f"[{symbol}] Bullish sweep detected but adverse move {adverse_pct:.3f}% is below opposing sweep threshold {opposing_sweep_min_adverse_pct:.3f}%. Holding SHORT."
+                            )
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Opposing Bullish Sweep detected at {current_price}. Exiting SHORT trade early after {adverse_pct:.3f}% adverse move."
+                            )
+                            pnl = (entry_price - current_price) * size
+                            self.paper_balance += pnl
+                            self.close_trade(symbol, current_price, pnl, "OPPOSING_SWEEP")
+                            return
 
             # Momentum Stall Exit
             stall_candles = self.config.get("stall_exit_candles", 0)
