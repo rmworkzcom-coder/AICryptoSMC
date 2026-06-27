@@ -1,5 +1,11 @@
-import uvicorn
 import os
+import sys
+import uvicorn
+
+# Ensure backend package is importable when running main.py directly
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 if __name__ == "__main__":
     # Ensure logs directory and files exist

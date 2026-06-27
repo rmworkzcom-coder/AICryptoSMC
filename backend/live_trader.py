@@ -575,6 +575,30 @@ class LiveTrader:
                 return True
         return False
 
+    def parse_klines(self, klines) -> Optional[pd.DataFrame]:
+        if not klines or not isinstance(klines, list):
+            return None
+        try:
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+            numeric_cols = [
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume'
+            ]
+            for col in numeric_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            df['timestamp'] = df['timestamp'].astype('Int64')
+            df['close_time'] = df['close_time'].astype('Int64')
+            return df
+        except Exception as e:
+            logger.warning(f"Failed to parse klines: {e}")
+            return None
+
     async def fetch_all_klines(self, symbols: List[str]) -> Dict[str, pd.DataFrame]:
         """Fetch historical klines for multiple symbols in controlled batches."""
         max_concurrency = min(self.config.get("max_fetch_concurrency", 10), len(symbols))
@@ -634,8 +658,8 @@ class LiveTrader:
         except Exception as e:
             logger.warning(f"Failed to fetch klines for {symbol} via public endpoint: {e}")
             return None
-            })
-        return pd.DataFrame(data)
+
+        return None
 
     async def start(self):
         if self.running:
