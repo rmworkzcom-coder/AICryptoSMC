@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 from binance.client import Client
+from binance.exceptions import BinanceAPIException, BinanceRequestException
 from backend.smc_engine import calculate_smc
 from backend.constants import DEFAULT_INITIAL_BALANCE
 
@@ -361,6 +362,7 @@ class LiveTrader:
         api_key = self.config.get("binance_api_key")
         api_secret = self.config.get("binance_api_secret")
         testnet = self.config.get("testnet", True)
+        trading_mode = self.config.get("trading_mode", "paper")
         
         if not api_key or not api_secret:
             # Fallback to .env.local
@@ -376,11 +378,17 @@ class LiveTrader:
             try:
                 self.client = Client(api_key, api_secret, testnet=testnet, requests_params={"timeout": 10})
                 self.log_message("Binance Client initialized successfully.")
+                self.verify_binance_connection()
             except Exception as e:
                 self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "error")
                 self.client = None
+                if trading_mode == "live":
+                    self.disable_live_mode("Binance client initialization failed")
         else:
-            self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
+            if trading_mode == "live":
+                self.disable_live_mode("No API keys available for live trading")
+            else:
+                self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
             self.client = None
 
     def _is_papi_unauthorized(self, exception: Exception) -> bool:
@@ -446,8 +454,52 @@ class LiveTrader:
             return res.json()
         except requests.exceptions.HTTPError as e:
             resp_text = res.text if 'res' in locals() else 'No response'
+            if self._is_api_unauthorized(e):
+                self.log_message("Portfolio Margin request unauthorized. Falling back if possible.", "warning")
             logger.error(f"PAPI API Request failed: {e}. Response body: {resp_text}")
             raise e
+
+    def _is_api_unauthorized(self, exception: Exception) -> bool:
+        text = str(exception).lower()
+        if 'invalid api-key' in text or 'invalid api-key, ip, or permissions' in text or '401' in text or 'unauthorized' in text:
+            return True
+        if isinstance(exception, (BinanceAPIException, BinanceRequestException)):
+            status = getattr(exception, 'status_code', None)
+            if status == 401:
+                return True
+        return False
+
+    def disable_live_mode(self, reason: str):
+        if self.config.get("trading_mode") != "live":
+            return
+        self.config["trading_mode"] = "paper"
+        self.save_config()
+        self.client = None
+        self.log_message(f"Disabling live trading due to authentication failure: {reason}. Switched to paper mode.", "warning")
+
+    def verify_binance_connection(self):
+        if self.config.get("trading_mode") != "live":
+            return
+
+        if not self.client:
+            self.disable_live_mode("Binance client is not initialized for live trading")
+            return
+
+        market_type = self.config.get("market_type", "futures")
+        portfolio_margin = self.config.get("portfolio_margin", False)
+
+        try:
+            if portfolio_margin:
+                self._make_papi_request("GET", "/papi/v1/balance")
+            elif market_type == "futures":
+                self.client.futures_account_balance()
+            else:
+                self.client.get_asset_balance(asset="USDT")
+        except Exception as e:
+            if self._is_api_unauthorized(e):
+                self.disable_live_mode("Binance API authentication failed during initial validation")
+            else:
+                self.log_message(f"Binance client validation failed: {e}", "warning")
 
     def get_live_balance(self) -> float:
         trading_mode = self.config.get("trading_mode", "paper")
@@ -490,8 +542,11 @@ class LiveTrader:
                     if b:
                         return float(b['free']) + float(b['locked'])
         except Exception as e:
+            if self._is_api_unauthorized(e):
+                self.disable_live_mode("Binance API unauthorized while fetching live balance")
+                return self.paper_balance
             logger.error(f"Error fetching live Binance balance: {e}")
-            
+        
         return self.paper_balance
 
     def get_exchange_positions(self) -> Dict[str, Dict]:
@@ -564,6 +619,9 @@ class LiveTrader:
                 self.save_trades()
                 
         except Exception as e:
+            if self._is_api_unauthorized(e):
+                self.disable_live_mode("Binance API unauthorized while fetching live positions")
+                return self.active_trades
             logger.error(f"Error fetching live exchange positions: {e}")
             
         return self.active_trades

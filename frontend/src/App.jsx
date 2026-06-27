@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createChart, CandlestickSeries, createSeriesMarkers, LineStyle } from 'lightweight-charts';
 import { 
   Play, Square, Settings as SettingsIcon, Activity, History, 
   BarChart3, RefreshCw, Key, ShieldAlert, Cpu, CheckCircle2, 
-  TrendingUp, TrendingDown, DollarSign, Percent, AlertCircle 
+  TrendingUp, DollarSign, AlertCircle 
 } from 'lucide-react';
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
@@ -12,7 +12,7 @@ const DEFAULT_INITIAL_BALANCE = 1600.0;
 const BACKEND_PORT = '8005';
 
 // SMC Chart Component using Lightweight Charts
-function SMCChart({ data, structures, symbol, timeframe, activeTrade }) {
+function SMCChart({ data, structures, activeTrade }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
 
@@ -178,10 +178,8 @@ export default function App() {
   
   // Live Bot States
   const [botRunning, setBotRunning] = useState(false);
-  const [botSymbol, setBotSymbol] = useState('BTCUSDT');
   const [botTimeframe, setBotTimeframe] = useState('15m');
   const [balance, setBalance] = useState(DEFAULT_INITIAL_BALANCE);
-  const [activeTrade, setActiveTrade] = useState(null);
   const [activeTrades, setActiveTrades] = useState({});
   const [scannedSymbolsStatus, setScannedSymbolsStatus] = useState({});
   const [scanCount, setScanCount] = useState(0);
@@ -241,23 +239,7 @@ export default function App() {
   const backendProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
   const websocketProtocol = window.location.protocol === 'https:' || window.location.origin.startsWith('https:') ? 'wss' : 'ws';
 
-  useEffect(() => {
-    connectWebSocket();
-    fetchConfig();
-    fetchTrades();
-    fetchLogs();
-    fetchLiveChart(selectedSymbol);
-
-    // Auto-refresh chart every 15 seconds
-    const interval = setInterval(() => fetchLiveChart(selectedSymbol), 15000);
-
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-      clearInterval(interval);
-    };
-  }, [selectedSymbol]);
-
-  const fetchLiveChart = async (symbolToFetch) => {
+  const fetchLiveChart = useCallback(async (symbolToFetch) => {
     try {
       const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
       const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/chart?symbol=${sym}`);
@@ -267,20 +249,9 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load live chart", e);
     }
-  };
+  }, [backendProtocol, selectedSymbol]);
 
-  // Request notification permission on load
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [logs]);
-
-  const connectWebSocket = () => {
+  const connectWebSocket = useCallback(function connect() {
     const wsUrl = `${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -290,10 +261,8 @@ export default function App() {
       if (msg.type === 'state') {
         const d = msg.data;
         setBotRunning(d.running);
-        setBotSymbol(d.symbol);
         setBotTimeframe(d.timeframe);
         setBalance(d.balance);
-        setActiveTrade(d.active_trade);
         setActiveTrades(d.active_trades || {});
         setLatestPrice(d.latest_price);
         setLatestTrend(d.latest_trend);
@@ -334,12 +303,28 @@ export default function App() {
     };
 
     ws.onclose = () => {
-      // Auto-reconnect after 3 seconds
-      setTimeout(connectWebSocket, 3000);
+      setTimeout(connect, 3000);
     };
-  };
+  }, [websocketProtocol, config.symbols]);
 
-  const fetchConfig = async () => {
+  const scrollToBottom = useCallback(() => {
+    if (consoleContainerRef.current) {
+      consoleContainerRef.current.scrollTop = consoleContainerRef.current.scrollHeight;
+    }
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [logs, scrollToBottom]);
+
+  // Request notification permission on load
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const fetchConfig = useCallback(async () => {
     try {
       const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`);
       const data = await res.json();
@@ -359,22 +344,21 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load config", e);
     }
-  };
+  }, [backendProtocol]);
 
-  const fetchTrades = async () => {
+  const fetchTrades = useCallback(async () => {
     try {
       const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/trades`);
       const data = await res.json();
-      setActiveTrade(data.active_trade);
       setActiveTrades(data.active_trades || {});
       setTradeHistory(data.trade_history || []);
       setBalance(data.paper_balance);
     } catch (e) {
       console.error("Failed to load trades", e);
     }
-  };
+  }, [backendProtocol]);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/logs`);
       const data = await res.json();
@@ -382,11 +366,30 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load logs", e);
     }
-  };
+  }, [backendProtocol]);
+
+  useEffect(() => {
+    connectWebSocket();
+    fetchConfig();
+    fetchTrades();
+    fetchLogs();
+    fetchLiveChart(selectedSymbol);
+
+    const interval = setInterval(() => fetchLiveChart(selectedSymbol), 15000);
+
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      clearInterval(interval);
+    };
+  }, [selectedSymbol, connectWebSocket, fetchConfig, fetchTrades, fetchLogs, fetchLiveChart]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [logs, scrollToBottom]);
 
   const saveConfig = async (updatedConfig) => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`, {
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedConfig)
@@ -404,7 +407,7 @@ export default function App() {
 
   const startBot = async () => {
     try {
-      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/bot/start`, { method: 'POST' });
+      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/bot/start`, { method: 'POST' });
       setBotRunning(true);
     } catch (e) {
       console.error(e);
@@ -413,7 +416,7 @@ export default function App() {
 
   const stopBot = async () => {
     try {
-      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/bot/stop`, { method: 'POST' });
+      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/bot/stop`, { method: 'POST' });
       setBotRunning(false);
     } catch (e) {
       console.error(e);
@@ -423,7 +426,7 @@ export default function App() {
   const handleSelectSymbol = async (symbol) => {
     setSelectedSymbol(symbol);
     try {
-      await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`, {
+      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selected_symbol: symbol })
@@ -438,7 +441,7 @@ export default function App() {
     setBacktesting(true);
     setBacktestResults(null);
     try {
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/backtest`, {
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(backtestConfig)
@@ -454,12 +457,6 @@ export default function App() {
       alert("Backtest error: " + e.message);
     } finally {
       setBacktesting(false);
-    }
-  };
-
-  const scrollToBottom = () => {
-    if (consoleContainerRef.current) {
-      consoleContainerRef.current.scrollTop = consoleContainerRef.current.scrollHeight;
     }
   };
 
@@ -927,7 +924,7 @@ export default function App() {
             onResetHistory={async () => {
               if (window.confirm(`Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $${DEFAULT_INITIAL_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 1})}.`)) {
                 try {
-                  const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
+                  const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
                   const data = await res.json();
                   setTradeHistory(data.trade_history || []);
                   setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
@@ -1273,6 +1270,7 @@ function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
 
   // Reset page when filter changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCurrentPage(1);
   }, [symbolFilter, typeFilter, statusFilter, sortBy]);
 
@@ -1321,7 +1319,7 @@ function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
               {netPnL >= 0 ? '+' : ''}${netPnL.toFixed(2)}
             </h4>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {config.trading_mode === 'live' ? 'Binance Balance' : 'Session Balance'}: <strong style={{ color: 'var(--text-main)' }}>${balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
+              Balance: <strong style={{ color: 'var(--text-main)' }}>${balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</strong>
             </span>
           </div>
         </div>
@@ -1589,6 +1587,7 @@ function SettingsPanel({ config, saveConfig }) {
   const [localConfig, setLocalConfig] = useState({ ...config });
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLocalConfig({ ...config });
   }, [config]);
 
