@@ -184,6 +184,9 @@ export default function App() {
   const [activeTrade, setActiveTrade] = useState(null);
   const [activeTrades, setActiveTrades] = useState({});
   const [scannedSymbolsStatus, setScannedSymbolsStatus] = useState({});
+  const [scanCount, setScanCount] = useState(0);
+  const [scanTotal, setScanTotal] = useState(0);
+  const [scanSkipped, setScanSkipped] = useState(0);
   const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   const [tradeHistory, setTradeHistory] = useState([]);
   const [latestPrice, setLatestPrice] = useState(0.0);
@@ -235,6 +238,9 @@ export default function App() {
   const consoleContainerRef = useRef(null);
 
   // Connect WebSockets
+  const backendProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
+  const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+
   useEffect(() => {
     connectWebSocket();
     fetchConfig();
@@ -254,7 +260,7 @@ export default function App() {
   const fetchLiveChart = async (symbolToFetch) => {
     try {
       const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/chart?symbol=${sym}`);
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/chart?symbol=${sym}`);
       const data = await res.json();
       setLiveChartData(data.chart_data);
       setLiveStructures(data.structures);
@@ -275,7 +281,7 @@ export default function App() {
   }, [logs]);
 
   const connectWebSocket = () => {
-    const ws = new WebSocket(`ws://${window.location.hostname}:${BACKEND_PORT}/ws`);
+    const ws = new WebSocket(`${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -291,6 +297,9 @@ export default function App() {
         setLatestPrice(d.latest_price);
         setLatestTrend(d.latest_trend);
         setScannedSymbolsStatus(d.scanned_symbols_status || {});
+        setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
+        setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : (config.symbols?.length || Object.keys(d.scanned_symbols_status || {}).length));
+        setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : Math.max(0, (config.symbols?.length || 0) - (Object.keys(d.scanned_symbols_status || {}).length)));
         if (d.selected_symbol) {
           setSelectedSymbol(d.selected_symbol);
         }
@@ -331,7 +340,7 @@ export default function App() {
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/config`);
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`);
       const data = await res.json();
       setConfig(data);
       // Sync backtest parameters with current settings as start
@@ -353,7 +362,7 @@ export default function App() {
 
   const fetchTrades = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades`);
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/trades`);
       const data = await res.json();
       setActiveTrade(data.active_trade);
       setActiveTrades(data.active_trades || {});
@@ -366,7 +375,7 @@ export default function App() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/logs`);
+      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/logs`);
       const data = await res.json();
       setLogs(data);
     } catch (e) {
@@ -527,10 +536,13 @@ export default function App() {
         <div style={styles.scanStatusBarTop}>
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Scan Progress</span>
-            <span style={styles.scanStatusValue}>{Object.keys(scannedSymbolsStatus).length} / {config.symbols?.length ?? Object.keys(scannedSymbolsStatus).length}</span>
+            <span style={styles.scanStatusValue}>{scanCount} / {scanTotal}</span>
             <div style={styles.scanProgressTrack}>
-              <div style={{ ...styles.scanProgressFill, width: `${Math.round((Object.keys(scannedSymbolsStatus).length / (config.symbols?.length || 1)) * 100)}%` }} />
+              <div style={{ ...styles.scanProgressFill, width: `${Math.round((scanCount / (scanTotal || 1)) * 100)}%` }} />
             </div>
+            {scanSkipped > 0 && (
+              <span style={styles.scanSkippedLabel}>{scanSkipped} skipped</span>
+            )}
           </div>
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Active Positions</span>
@@ -1873,6 +1885,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
+    flex: '1 1 0',
     minWidth: '180px',
   },
   scanStatusLabel: {
@@ -1899,6 +1912,11 @@ const styles = {
     fontSize: '1.25rem',
     color: 'var(--text-main)',
     fontWeight: '700',
+  },
+  scanSkippedLabel: {
+    fontSize: '0.8rem',
+    color: 'var(--text-muted)',
+    marginTop: '4px',
   },
   emptyState: {
     display: 'flex',

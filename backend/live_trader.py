@@ -268,6 +268,10 @@ class LiveTrader:
                     "is_swing_high": bool(latest_candle.get('is_swing_high', False)),
                     "is_swing_low": bool(latest_candle.get('is_swing_low', False))
                 }
+
+        total_symbols = len(self.config.get("symbols", []))
+        scanned_count = len(scanned_symbols_status)
+        skipped_count = max(0, total_symbols - scanned_count)
                 
         try:
             live_balance = await asyncio.to_thread(self.get_live_balance)
@@ -284,6 +288,9 @@ class LiveTrader:
                     "latest_price": latest_close,
                     "latest_trend": latest_trend,
                     "scanned_symbols_status": scanned_symbols_status,
+                    "scan_total": total_symbols,
+                    "scan_count": scanned_count,
+                    "scan_skipped": skipped_count,
                     "trade_history": self.trade_history
                 }
             })
@@ -376,6 +383,17 @@ class LiveTrader:
             self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
             self.client = None
 
+    def _is_papi_unauthorized(self, exception: Exception) -> bool:
+        if isinstance(exception, requests.exceptions.HTTPError):
+            response = getattr(exception, 'response', None)
+            if response is not None:
+                if response.status_code == 401:
+                    return True
+                body = response.text.lower()
+                if 'invalid api-key' in body or 'invalid api-key, ip, or permissions' in body:
+                    return True
+        return False
+
     def _make_papi_request(self, method: str, endpoint: str, params: dict = None) -> dict:
         """Helper to sign and execute REST requests to the Binance Portfolio Margin API."""
         api_key = self.config.get("binance_api_key")
@@ -440,15 +458,25 @@ class LiveTrader:
         
         try:
             if portfolio_margin:
-                res = self._make_papi_request("GET", "/papi/v1/balance")
-                if isinstance(res, list):
-                    for b in res:
-                        if b.get('asset') == 'USDT':
-                            return float(b.get('totalWalletBalance', 0.0))
-                elif isinstance(res, dict):
-                    if res.get('asset') == 'USDT':
-                        return float(res.get('totalWalletBalance', 0.0))
-            else:
+                try:
+                    res = self._make_papi_request("GET", "/papi/v1/balance")
+                    if isinstance(res, list):
+                        for b in res:
+                            if b.get('asset') == 'USDT':
+                                return float(b.get('totalWalletBalance', 0.0))
+                    elif isinstance(res, dict):
+                        if res.get('asset') == 'USDT':
+                            return float(res.get('totalWalletBalance', 0.0))
+                except requests.exceptions.HTTPError as e:
+                    if self._is_papi_unauthorized(e):
+                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures balance retrieval.", "warning")
+                        self.config["portfolio_margin"] = False
+                        self.save_config()
+                        portfolio_margin = False
+                    else:
+                        logger.error(f"Error fetching live Binance balance: {e}")
+                        return self.paper_balance
+            if not portfolio_margin:
                 if not self.client:
                     return self.paper_balance
                 market_type = self.config.get("market_type", "futures")
@@ -480,10 +508,19 @@ class LiveTrader:
         try:
             positions_raw = []
             if portfolio_margin:
-                res = self._make_papi_request("GET", "/papi/v1/um/positionRisk")
-                if isinstance(res, list):
-                    positions_raw = res
-            else:
+                try:
+                    res = self._make_papi_request("GET", "/papi/v1/um/positionRisk")
+                    if isinstance(res, list):
+                        positions_raw = res
+                except requests.exceptions.HTTPError as e:
+                    if self._is_papi_unauthorized(e):
+                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures position retrieval.", "warning")
+                        self.config["portfolio_margin"] = False
+                        self.save_config()
+                        portfolio_margin = False
+                    else:
+                        raise
+            if not portfolio_margin:
                 if self.client:
                     market_type = self.config.get("market_type", "futures")
                     if market_type == "futures":
