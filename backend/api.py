@@ -135,6 +135,7 @@ class ConfigUpdate(BaseModel):
     breakeven_trigger: Optional[float] = None
     peak_drawdown_exit_pct: Optional[float] = None
     max_trade_loss_pct: Optional[float] = None
+    max_trade_loss_usd: Optional[float] = None
     max_active_trades: Optional[int] = None
     selected_symbol: Optional[str] = None
     symbols: Optional[List[str]] = None
@@ -154,7 +155,7 @@ class BacktestRequest(BaseModel):
 
 @app.get("/config")
 def get_config():
-    return trader.load_config()
+    return trader.config
 
 @app.post("/config")
 def update_config(cfg: ConfigUpdate):

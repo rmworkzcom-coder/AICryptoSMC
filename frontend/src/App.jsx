@@ -240,7 +240,8 @@ export default function App() {
     m_range: 5,
     breakeven_trigger: 1.0,
     peak_drawdown_exit_pct: 4.0,
-    portfolio_margin: false
+    portfolio_margin: false,
+    max_trade_loss_usd: 35.0
   });
 
   // Backtest States
@@ -429,7 +430,8 @@ export default function App() {
       setConfig(prev => ({
         ...prev,
         ...data,
-        peak_drawdown_exit_pct: typeof data.peak_drawdown_exit_pct === 'number' ? data.peak_drawdown_exit_pct : prev.peak_drawdown_exit_pct
+        peak_drawdown_exit_pct: typeof data.peak_drawdown_exit_pct === 'number' ? data.peak_drawdown_exit_pct : prev.peak_drawdown_exit_pct,
+        max_trade_loss_usd: typeof data.max_trade_loss_usd === 'number' ? data.max_trade_loss_usd : prev.max_trade_loss_usd
       }));
       // Sync backtest parameters with current settings as start
       setBacktestConfig(prev => ({
@@ -926,8 +928,8 @@ export default function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                     {Object.entries(activeTrades).map(([symbol, trade]) => {
                       const currentPriceForSymbol = symbol === selectedSymbol 
-                        ? latestPrice 
-                        : (scannedSymbolsStatus[symbol]?.price || trade.entry_price);
+                        ? (latestPrice || trade.mark_price || trade.entry_price)
+                        : (scannedSymbolsStatus[symbol]?.price || trade.mark_price || trade.entry_price);
                       
                       const pnl = trade.type === 'long' 
                         ? (currentPriceForSymbol - trade.entry_price) * trade.size
@@ -999,8 +1001,12 @@ export default function App() {
                               <span style={styles.metricValue}>{Number(trade.size).toLocaleString(undefined, { maximumFractionDigits: 6 })} {symbol.replace('USDT', '')}</span>
                             </div>
                             <div>
-                              <span style={styles.metricLabel}>Invested</span>
+                              <span style={styles.metricLabel}>Exposure</span>
                               <span style={styles.metricValue}>${formatPrice(positionValue)}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>Risk</span>
+                              <span style={styles.metricValue}>${trade.risk_amount !== undefined && trade.risk_amount !== null ? Number(trade.risk_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '---'}</span>
                             </div>
                           </div>
 
@@ -1443,17 +1449,32 @@ function formatPrice(value) {
   if (value === undefined || value === null || Number.isNaN(Number(value))) {
     return '---';
   }
+
   const price = Number(value);
   const absPrice = Math.abs(price);
+
   let digits = 4;
-  if (absPrice > 0 && absPrice < 0.001) {
+  if (absPrice === 0) {
     digits = 8;
-  } else if (absPrice > 0 && absPrice < 0.01) {
+  } else if (absPrice < 0.0001) {
+    digits = 10;
+  } else if (absPrice < 0.001) {
+    digits = 9;
+  } else if (absPrice < 0.01) {
+    digits = 8;
+  } else if (absPrice < 0.1) {
+    digits = 7;
+  } else if (absPrice < 1) {
     digits = 6;
+  } else if (absPrice < 10) {
+    digits = 5;
+  } else {
+    digits = 4;
   }
+
   return price.toLocaleString(undefined, {
     minimumFractionDigits: digits,
-    maximumFractionDigits: digits
+    maximumFractionDigits: digits,
   });
 }
 
@@ -1986,6 +2007,20 @@ function SettingsPanel({ config, saveConfig }) {
           />
           <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
             Close a winning trade if it pulls back more than this percentage from its peak.
+          </small>
+        </div>
+
+        <div className="form-group">
+          <label>Max Trade Loss (USD)</label>
+          <input 
+            type="number" 
+            step="1"
+            value={localConfig.max_trade_loss_usd ?? 35.0} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, max_trade_loss_usd: parseFloat(e.target.value) || 0.0 }))}
+          />
+          <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            Cap the dollar risk per trade. Set to 0 to disable.
           </small>
         </div>
 

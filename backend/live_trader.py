@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import os
+import shutil
 import requests
 import hmac
 import hashlib
@@ -74,19 +75,39 @@ class LiveTrader:
             self.active_trades[symbol] = value
 
     def load_config(self) -> Dict:
+        if not os.path.exists(self.config_path):
+            logger.warning(f"Config file not found at {self.config_path}. Using existing config or defaults.")
+            return getattr(self, 'config', {}) or {}
+
         try:
+            if os.stat(self.config_path).st_size == 0:
+                logger.error(f"Config file {self.config_path} is empty. Using existing config if available.")
+                return getattr(self, 'config', {}) or {}
+
             with open(self.config_path, 'r') as f:
                 return json.load(f)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error loading config: {e}. Using existing config if available.")
+            return getattr(self, 'config', {}) or {}
         except Exception as e:
-            logger.error(f"Error loading config: {e}")
-            return {}
+            logger.error(f"Error loading config: {e}. Using existing config if available.")
+            return getattr(self, 'config', {}) or {}
 
     def save_config(self):
+        temp_path = self.config_path + ".tmp"
         try:
-            with open(self.config_path, 'w') as f:
+            with open(temp_path, 'w') as f:
                 json.dump(self.config, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.config_path)
         except Exception as e:
             logger.error(f"Error saving config: {e}")
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
 
     def load_trades(self):
         self.active_trades = {}
@@ -764,6 +785,17 @@ class LiveTrader:
                         entry_time = local_trade.get('entry_time', entry_time)
                         risk_amount = local_trade.get('risk_amount', 0.0)
                     
+                    if (sl is None or sl <= 0.0) or (tp is None or tp <= 0.0):
+                        inferred_sl, inferred_tp = self._infer_missing_sl_tp(side, entry_price, size, risk_amount)
+                        if inferred_sl is not None and (sl is None or sl <= 0.0):
+                            sl = inferred_sl
+                        if inferred_tp is not None and (tp is None or tp <= 0.0):
+                            tp = inferred_tp
+                        self.log_message(
+                            f"[{symbol}] Reconstructed missing SL/TP for live position: SL={sl:.8f}, TP={tp:.8f}.",
+                            "warning"
+                        )
+                    
                     if unrealized_pnl == 0.0 and mark_price > 0 and entry_price > 0:
                         if side == 'long':
                             unrealized_pnl = (mark_price - entry_price) * size
@@ -799,6 +831,27 @@ class LiveTrader:
             logger.error(f"Error fetching live exchange positions: {e}")
             
         return self.active_trades
+
+    def _infer_missing_sl_tp(self, trade_type: str, entry_price: float, size: float, risk_amount: float) -> Tuple[Optional[float], Optional[float]]:
+        if entry_price <= 0 or size <= 0:
+            return None, None
+
+        rr_ratio = self.config.get('rr_ratio', 2.0)
+        risk_per_share = 0.0
+
+        if isinstance(risk_amount, (int, float)) and risk_amount > 0.0:
+            risk_per_share = risk_amount / size
+        else:
+            risk_per_share = max(entry_price * 0.005, 1e-8)
+
+        if trade_type == 'long':
+            sl = entry_price - risk_per_share
+            tp = entry_price + (rr_ratio * risk_per_share)
+        else:
+            sl = entry_price + risk_per_share
+            tp = entry_price - (rr_ratio * risk_per_share)
+
+        return sl, tp
 
     def _record_external_closes(self, exchange_positions: Dict[str, Dict]):
         """Detect and record trades that were closed externally on Binance."""
@@ -1156,6 +1209,21 @@ class LiveTrader:
             tp = trade['tp']
             size = trade['size']
             entry_price = trade['entry_price']
+
+            # Safety gate: if either SL or TP is missing, do not keep trading this position.
+            if sl is None or tp is None or sl <= 0.0 or tp <= 0.0:
+                current_price = float(current_candle['close'])
+                if trade_type == 'long':
+                    pnl = (current_price - entry_price) * size
+                else:
+                    pnl = (entry_price - current_price) * size
+                self.paper_balance += pnl
+                self.log_message(
+                    f"[{symbol}] Active trade missing SL/TP (sl={sl}, tp={tp}). Closing immediately to avoid unprotected exposure.",
+                    "warning"
+                )
+                self.close_trade(symbol, current_price, pnl, "NO_PROTECTION")
+                return
             
             # Update Peak Price for Trailing Stop
             peak_price = trade.get('peak_price', entry_price)
@@ -1290,6 +1358,7 @@ class LiveTrader:
 
             # Hard loss cap exit
             max_trade_loss_pct = self.config.get("max_trade_loss_pct", 0.0)
+            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
             if max_trade_loss_pct > 0.0:
                 if trade_type == 'long':
                     loss_pct = ((entry_price - current_low) / entry_price) * 100.0
@@ -1306,6 +1375,23 @@ class LiveTrader:
                         self.paper_balance += pnl
                         self.log_message(f"[{symbol}] HARD STOP triggered at {current_high:.8f} after {loss_pct:.2f}% loss. Exiting SHORT trade.")
                         self.close_trade(symbol, current_high, pnl, "HARD_STOP")
+                        return
+            if max_trade_loss_usd > 0.0:
+                if trade_type == 'long':
+                    loss_usd = (entry_price - current_low) * size
+                    if loss_usd >= max_trade_loss_usd:
+                        pnl = (current_low - entry_price) * size
+                        self.paper_balance += pnl
+                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {current_low:.8f} after ${loss_usd:.2f} loss. Exiting LONG trade.")
+                        self.close_trade(symbol, current_low, pnl, "HARD_LOSS_CAP")
+                        return
+                elif trade_type == 'short':
+                    loss_usd = (current_high - entry_price) * size
+                    if loss_usd >= max_trade_loss_usd:
+                        pnl = (entry_price - current_high) * size
+                        self.paper_balance += pnl
+                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {current_high:.8f} after ${loss_usd:.2f} loss. Exiting SHORT trade.")
+                        self.close_trade(symbol, current_high, pnl, "HARD_LOSS_CAP")
                         return
 
             # Read SL again
@@ -1396,6 +1482,12 @@ class LiveTrader:
                         if risk_per_share > 0:
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
+                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                self.log_message(
+                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                )
+                                risk_usd = max_trade_loss_usd
                             size = risk_usd / risk_per_share
                             take_profit = entry_price + (rr_ratio * risk_per_share)
                             
@@ -1424,6 +1516,12 @@ class LiveTrader:
                         if risk_per_share > 0:
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
+                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                self.log_message(
+                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                )
+                                risk_usd = max_trade_loss_usd
                             size = risk_usd / risk_per_share
                             take_profit = entry_price - (rr_ratio * risk_per_share)
                             
