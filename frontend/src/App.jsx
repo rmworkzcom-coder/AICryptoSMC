@@ -467,6 +467,7 @@ export default function App() {
       setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
       setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
       setScanSkipped(typeof data.scan_skipped === 'number' ? data.scan_skipped : 0);
+      setScanCycleCount(typeof data.scan_cycle_count === 'number' ? data.scan_cycle_count : 0);
       if (typeof data.scan_interval_secs === 'number') {
         setScanIntervalSeconds(data.scan_interval_secs);
       }
