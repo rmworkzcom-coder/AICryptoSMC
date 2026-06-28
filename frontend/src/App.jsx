@@ -928,6 +928,7 @@ export default function App() {
                         ? (currentPriceForSymbol - trade.entry_price) * trade.size
                         : (trade.entry_price - currentPriceForSymbol) * trade.size;
                       const pnlPct = (pnl / (trade.entry_price * trade.size)) * 100;
+                      const positionValue = trade.entry_price * trade.size;
                       
                       return (
                         <div key={symbol} style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', background: 'rgba(255, 255, 255, 0.02)' }}>
@@ -987,6 +988,14 @@ export default function App() {
                             <div>
                               <span style={styles.metricLabel}>TP</span>
                               <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${formatPrice(trade.tp)}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>Size</span>
+                              <span style={styles.metricValue}>{Number(trade.size).toLocaleString(undefined, { maximumFractionDigits: 6 })} {symbol.replace('USDT', '')}</span>
+                            </div>
+                            <div>
+                              <span style={styles.metricLabel}>Position Value</span>
+                              <span style={styles.metricValue}>${formatPrice(positionValue)}</span>
                             </div>
                           </div>
 
