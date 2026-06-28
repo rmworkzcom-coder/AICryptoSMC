@@ -194,6 +194,12 @@ export default function App() {
   const [latestPrice, setLatestPrice] = useState(0.0);
   const [latestTrend, setLatestTrend] = useState('neutral');
   const activePositionsPnl = Object.entries(activeTrades).reduce((sum, [symbol, trade]) => {
+    const unrealized = trade.unrealized_pnl !== undefined && trade.unrealized_pnl !== null
+      ? parseFloat(trade.unrealized_pnl) || 0
+      : 0;
+    if (unrealized !== 0) {
+      return sum + unrealized;
+    }
     const currentPrice = symbol === selectedSymbol
       ? latestPrice
       : (scannedSymbolsStatus[symbol]?.price || trade.entry_price || 0);

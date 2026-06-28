@@ -743,7 +743,9 @@ class LiveTrader:
                 symbol = pos.get('symbol')
                 position_amt = float(pos.get('positionAmt', 0.0) or pos.get('positionAmount', 0.0) or 0.0)
                 if position_amt != 0.0:
-                    entry_price = float(pos.get('entryPrice', 0.0) or 0.0)
+                    entry_price = float(pos.get('entryPrice', pos.get('entry_price', 0.0)) or 0.0)
+                    mark_price = float(pos.get('markPrice', pos.get('mark_price', 0.0)) or 0.0)
+                    unrealized_pnl = float(pos.get('unRealizedProfit', pos.get('unrealizedProfit', 0.0)) or 0.0)
                     side = 'long' if position_amt > 0 else 'short'
                     size = abs(position_amt)
                     
@@ -759,10 +761,18 @@ class LiveTrader:
                         entry_time = local_trade.get('entry_time', entry_time)
                         risk_amount = local_trade.get('risk_amount', 0.0)
                     
+                    if unrealized_pnl == 0.0 and mark_price > 0 and entry_price > 0:
+                        if side == 'long':
+                            unrealized_pnl = (mark_price - entry_price) * size
+                        else:
+                            unrealized_pnl = (entry_price - mark_price) * size
+                    
                     exchange_positions[symbol] = {
                         'symbol': symbol,
                         'type': side,
                         'entry_price': entry_price,
+                        'mark_price': mark_price,
+                        'unrealized_pnl': unrealized_pnl,
                         'sl': sl,
                         'tp': tp,
                         'size': size,
