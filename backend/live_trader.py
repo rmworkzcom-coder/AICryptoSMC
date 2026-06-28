@@ -292,6 +292,10 @@ class LiveTrader:
                     "scan_total": total_symbols,
                     "scan_count": scanned_count,
                     "scan_skipped": skipped_count,
+                    "trading_mode": self.config.get("trading_mode", "paper"),
+                    "portfolio_margin": self.config.get("portfolio_margin", False),
+                    "scan_interval_secs": self.config.get("scan_interval_secs", 15),
+                    "scan_last_broadcast_at": int(time.time() * 1000),
                     "trade_history": self.trade_history
                 }
             })
@@ -606,9 +610,7 @@ class LiveTrader:
                             return float(res.get('totalWalletBalance', 0.0))
                 except requests.exceptions.HTTPError as e:
                     if self._is_papi_unauthorized(e):
-                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures balance retrieval.", "warning")
-                        self.config["portfolio_margin"] = False
-                        self.save_config()
+                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures balance retrieval for this cycle.", "warning")
                         portfolio_margin = False
                     else:
                         logger.error(f"Error fetching live Binance balance: {e}")
@@ -657,9 +659,7 @@ class LiveTrader:
                         positions_raw = res
                 except requests.exceptions.HTTPError as e:
                     if self._is_papi_unauthorized(e):
-                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures position retrieval.", "warning")
-                        self.config["portfolio_margin"] = False
-                        self.save_config()
+                        self.log_message("Portfolio Margin PAPI unauthorized; falling back to standard futures position retrieval for this cycle.", "warning")
                         portfolio_margin = False
                     else:
                         raise
@@ -1427,9 +1427,7 @@ class LiveTrader:
                             trade_details['tp_order_id'] = tp_order.get('algoId')
                         except requests.exceptions.HTTPError as e:
                             if self._is_papi_unauthorized(e):
-                                self.log_message(f"[{symbol}] Portfolio Margin PAPI unauthorized during order entry; falling back to standard futures.", "warning")
-                                self.config["portfolio_margin"] = False
-                                self.save_config()
+                                self.log_message(f"[{symbol}] Portfolio Margin PAPI unauthorized during order entry; falling back to standard futures for this order.", "warning")
                                 portfolio_margin = False
                             else:
                                 raise

@@ -186,8 +186,9 @@ export default function App() {
   const [scanTotal, setScanTotal] = useState(0);
   const [scanSkipped, setScanSkipped] = useState(0);
   const [nextScanCountdown, setNextScanCountdown] = useState(15);
-  const scanIntervalSeconds = 15;
-  const [scanLastRunAt, setScanLastRunAt] = useState(Date.now());
+  const [scanIntervalSeconds, setScanIntervalSeconds] = useState(15);
+  const [scanLastBroadcastAt, setScanLastBroadcastAt] = useState(Date.now());
+  const [isScanning, setIsScanning] = useState(false);
   const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   const [tradeHistory, setTradeHistory] = useState([]);
   const [latestPrice, setLatestPrice] = useState(0.0);
@@ -235,6 +236,8 @@ export default function App() {
 
   // References
   const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const shouldReconnectRef = useRef(true);
   const logsEndRef = useRef(null);
   const consoleContainerRef = useRef(null);
 
@@ -249,9 +252,6 @@ export default function App() {
       const data = await res.json();
       setLiveChartData(data.chart_data);
       setLiveStructures(data.structures);
-      const now = Date.now();
-      setScanLastRunAt(now);
-      setNextScanCountdown(scanIntervalSeconds);
     } catch (e) {
       console.error("Failed to load live chart", e);
     }
@@ -289,6 +289,19 @@ export default function App() {
         setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
         setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : (config.symbols?.length || Object.keys(d.scanned_symbols_status || {}).length));
         setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : Math.max(0, (config.symbols?.length || 0) - (Object.keys(d.scanned_symbols_status || {}).length)));
+        if (typeof d.scan_interval_secs === 'number') {
+          setScanIntervalSeconds(d.scan_interval_secs);
+        }
+        if (typeof d.scan_last_broadcast_at === 'number') {
+          setScanLastBroadcastAt(d.scan_last_broadcast_at);
+        }
+        if (typeof d.trading_mode === 'string') {
+          setConfig(prev => ({ ...prev, trading_mode: d.trading_mode }));
+        }
+        if (typeof d.portfolio_margin === 'boolean') {
+          setConfig(prev => ({ ...prev, portfolio_margin: d.portfolio_margin }));
+        }
+        setIsScanning(false);
         if (d.selected_symbol) {
           setSelectedSymbol(d.selected_symbol);
         }
@@ -323,7 +336,9 @@ export default function App() {
     };
 
     ws.onclose = () => {
-      setTimeout(connect, 3000);
+      if (shouldReconnectRef.current) {
+        reconnectTimerRef.current = window.setTimeout(connect, 3000);
+      }
     };
   }, [websocketProtocol, config.symbols]);
 
@@ -398,19 +413,25 @@ export default function App() {
     const interval = setInterval(() => fetchLiveChart(selectedSymbol), 15000);
 
     return () => {
+      shouldReconnectRef.current = false;
       if (wsRef.current) wsRef.current.close();
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
       clearInterval(interval);
     };
   }, [selectedSymbol, connectWebSocket, fetchConfig, fetchTrades, fetchLogs, fetchLiveChart]);
 
   useEffect(() => {
     const countdown = setInterval(() => {
-      const elapsedSeconds = Math.floor((Date.now() - scanLastRunAt) / 1000);
-      setNextScanCountdown(Math.max(scanIntervalSeconds - elapsedSeconds, 0));
+      const elapsedSeconds = Math.floor((Date.now() - scanLastBroadcastAt) / 1000);
+      const remaining = Math.max(scanIntervalSeconds - elapsedSeconds, 0);
+      setNextScanCountdown(remaining);
+      setIsScanning(botRunning && remaining === 0);
     }, 250);
 
     return () => clearInterval(countdown);
-  }, [scanLastRunAt]);
+  }, [scanLastBroadcastAt, scanIntervalSeconds, botRunning]);
 
   useEffect(() => {
     scrollToBottom();
@@ -577,7 +598,9 @@ export default function App() {
           </div>
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Next Scan In</span>
-            <span style={styles.scanStatusValue}>{nextScanCountdown} sec</span>
+            <span style={styles.scanStatusValue}>
+              {isScanning ? 'Scanning...' : `${nextScanCountdown} sec`}
+            </span>
           </div>
         </div>
       )}
