@@ -290,6 +290,7 @@ class LiveTrader:
                     "active_trades": self.active_trades,
                     "active_trade": self.active_trade,  # legacy support
                     "balance": live_balance,
+                    "initial_balance": DEFAULT_INITIAL_BALANCE,
                     "latest_price": latest_close,
                     "latest_trend": latest_trend,
                     "scanned_symbols_status": scanned_symbols_status,

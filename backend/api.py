@@ -150,6 +150,7 @@ def get_status():
         "selected_symbol": selected_symbol,
         "timeframe": trader.config.get("timeframe"),
         "paper_balance": trader.get_live_balance(),
+        "initial_balance": DEFAULT_INITIAL_BALANCE,
         "active_trades": trader.get_exchange_positions(),
         "active_trade": trader.active_trade,  # legacy support
         "latest_price": latest_close,
@@ -169,7 +170,8 @@ async def get_trades():
         "active_trades": trader.get_exchange_positions(),
         "active_trade": trader.active_trade,  # legacy support
         "trade_history": trader.trade_history,
-        "paper_balance": trader.get_live_balance()
+        "paper_balance": trader.get_live_balance(),
+        "initial_balance": DEFAULT_INITIAL_BALANCE
     }
 
 @app.post("/trades/reset")
@@ -179,7 +181,8 @@ async def reset_trades():
         "status": "success",
         "active_trades": trader.active_trades,
         "trade_history": trader.trade_history,
-        "paper_balance": trader.get_live_balance()
+        "paper_balance": trader.get_live_balance(),
+        "initial_balance": DEFAULT_INITIAL_BALANCE
     }
 
 @app.post("/trades/liquidate")
@@ -192,7 +195,8 @@ async def liquidate_trades(symbol: Optional[str] = None):
         "status": "success",
         "active_trades": trader.active_trades,
         "trade_history": trader.trade_history,
-        "paper_balance": trader.get_live_balance()
+        "paper_balance": trader.get_live_balance(),
+        "initial_balance": DEFAULT_INITIAL_BALANCE
     }
 
 @app.get("/chart")

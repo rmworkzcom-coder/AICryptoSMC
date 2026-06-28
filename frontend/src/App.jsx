@@ -9,7 +9,6 @@ import {
 const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT"];
 const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_INITIAL_BALANCE = 1600.0;
-const BACKEND_PORT = '8005';
 
 // SMC Chart Component using Lightweight Charts
 function SMCChart({ data, structures, activeTrade }) {
@@ -180,6 +179,7 @@ export default function App() {
   const [botRunning, setBotRunning] = useState(false);
   const [botTimeframe, setBotTimeframe] = useState('15m');
   const [balance, setBalance] = useState(DEFAULT_INITIAL_BALANCE);
+  const [initialBalance, setInitialBalance] = useState(DEFAULT_INITIAL_BALANCE);
   const [activeTrades, setActiveTrades] = useState({});
   const [scannedSymbolsStatus, setScannedSymbolsStatus] = useState({});
   const [scanCount, setScanCount] = useState(0);
@@ -193,6 +193,21 @@ export default function App() {
   const [tradeHistory, setTradeHistory] = useState([]);
   const [latestPrice, setLatestPrice] = useState(0.0);
   const [latestTrend, setLatestTrend] = useState('neutral');
+  const activePositionsPnl = Object.entries(activeTrades).reduce((sum, [symbol, trade]) => {
+    const currentPrice = symbol === selectedSymbol
+      ? latestPrice
+      : (scannedSymbolsStatus[symbol]?.price || trade.entry_price || 0);
+    const entryPrice = parseFloat(trade.entry_price) || 0;
+    const size = parseFloat(trade.size) || 0;
+    const pnl = trade.type === 'short'
+      ? (entryPrice - currentPrice) * size
+      : (currentPrice - entryPrice) * size;
+    return sum + pnl;
+  }, 0);
+  const totalPnl = activePositionsPnl;
+  const totalPnlPct = initialBalance > 0 ? (totalPnl / initialBalance) * 100 : 0;
+  const formattedTotalPnl = `${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formattedTotalPnlPct = `${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)}%`;
   const [logs, setLogs] = useState([]);
   const [apiError, setApiError] = useState(null);
   const [binanceAuthStatus, setBinanceAuthStatus] = useState('unknown');
@@ -293,6 +308,7 @@ export default function App() {
         setBotRunning(d.running);
         setBotTimeframe(d.timeframe);
         setBalance(d.balance);
+        setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : DEFAULT_INITIAL_BALANCE);
         setActiveTrades(d.active_trades || {});
         setLatestPrice(d.latest_price);
         setLatestTrend(d.latest_trend);
@@ -415,6 +431,9 @@ export default function App() {
       setActiveTrades(data.active_trades || {});
       setTradeHistory(data.trade_history || []);
       setBalance(data.paper_balance);
+      if (typeof data.initial_balance === 'number') {
+        setInitialBalance(data.initial_balance);
+      }
     } catch (e) {
       console.error("Failed to load trades", e);
     }
@@ -761,6 +780,17 @@ export default function App() {
                 </div>
                 <div style={styles.statusRow}>
                   <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Total P&L</span>
+                    <span style={{
+                      ...styles.statusValue,
+                      color: totalPnl > 0 ? 'var(--bullish)' : totalPnl < 0 ? 'var(--bearish)' : 'var(--text-muted)'
+                    }}>
+                      ${formattedTotalPnl} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>({formattedTotalPnlPct})</span>
+                    </span>
+                  </div>
+                </div>
+                <div style={styles.statusRow}>
+                  <div style={styles.statusCell}>
                     <span style={styles.statusLabel}>Binance Auth</span>
                     <span style={{
                       ...styles.statusValue,
@@ -789,7 +819,7 @@ export default function App() {
                       onClick={async () => {
                         if (window.confirm("Are you sure you want to liquidate all active positions at their current market prices?")) {
                           try {
-                            const res = await fetch(`http://${backendHost}:${BACKEND_PORT}/trades/liquidate`, { method: 'POST' });
+                            const res = await fetch('/trades/liquidate', { method: 'POST' });
                             const data = await res.json();
                             setActiveTrades(data.active_trades || {});
                             setTradeHistory(data.trade_history || []);
@@ -837,7 +867,7 @@ export default function App() {
                                   e.stopPropagation();
                                   if (window.confirm(`Are you sure you want to liquidate the ${symbol} position?`)) {
                                     try {
-                                      const res = await fetch(`http://${backendHost}:${BACKEND_PORT}/trades/liquidate?symbol=${symbol}`, { method: 'POST' });
+                                      const res = await fetch(`/trades/liquidate?symbol=${symbol}`, { method: 'POST' });
                                       const data = await res.json();
                                       setActiveTrades(data.active_trades || {});
                                       setTradeHistory(data.trade_history || []);
@@ -1031,7 +1061,7 @@ export default function App() {
             onResetHistory={async () => {
               if (window.confirm(`Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $${DEFAULT_INITIAL_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 1})}.`)) {
                 try {
-                  const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
+                  const res = await fetch('/trades/reset', { method: 'POST' });
                   const data = await res.json();
                   setTradeHistory(data.trade_history || []);
                   setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);
