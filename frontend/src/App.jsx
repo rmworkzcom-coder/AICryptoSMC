@@ -221,6 +221,8 @@ export default function App() {
   const [binanceAuthMode, setBinanceAuthMode] = useState(null);
   const [binanceAuthMessage, setBinanceAuthMessage] = useState(null);
   
+  const [statusLoaded, setStatusLoaded] = useState(false);
+  
   // Configuration State
   const [config, setConfig] = useState({
     binance_api_key: '',
@@ -445,6 +447,54 @@ export default function App() {
     }
   }, []);
 
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/bot/status');
+      const data = await res.json();
+      setBotRunning(data.running);
+      setBotTimeframe(data.timeframe || botTimeframe);
+      setBalance(data.balance || data.paper_balance || balance);
+      setInitialBalance(typeof data.initial_balance === 'number' ? data.initial_balance : initialBalance);
+      setActiveTrades(data.active_trades || {});
+      setLatestPrice(data.latest_price || latestPrice);
+      setLatestTrend(data.latest_trend || latestTrend);
+      setScannedSymbolsStatus(data.scanned_symbols_status || {});
+      setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
+      setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
+      setScanSkipped(typeof data.scan_skipped === 'number' ? data.scan_skipped : 0);
+      if (typeof data.scan_interval_secs === 'number') {
+        setScanIntervalSeconds(data.scan_interval_secs);
+      }
+      if (typeof data.scan_last_broadcast_at === 'number') {
+        setScanLastBroadcastAt(data.scan_last_broadcast_at);
+      }
+      if (typeof data.trading_mode === 'string') {
+        setConfig(prev => ({ ...prev, trading_mode: data.trading_mode }));
+      }
+      if (typeof data.portfolio_margin === 'boolean') {
+        setConfig(prev => ({ ...prev, portfolio_margin: data.portfolio_margin }));
+      }
+      if (typeof data.binance_auth_status === 'string') {
+        setBinanceAuthStatus(data.binance_auth_status);
+      }
+      if (typeof data.binance_auth_source === 'string') {
+        setBinanceAuthSource(data.binance_auth_source);
+      }
+      if (typeof data.binance_auth_mode === 'string') {
+        setBinanceAuthMode(data.binance_auth_mode);
+      }
+      if (typeof data.binance_auth_message === 'string') {
+        setBinanceAuthMessage(data.binance_auth_message);
+      }
+      if (data.trade_history) {
+        setTradeHistory(data.trade_history);
+      }
+      setStatusLoaded(true);
+    } catch (e) {
+      console.error("Failed to load bot status", e);
+    }
+  }, [botTimeframe, balance, initialBalance, latestPrice, latestTrend]);
+
   const fetchLogs = useCallback(async () => {
     try {
       const res = await fetch('/logs');
@@ -666,9 +716,16 @@ export default function App() {
             <span style={styles.scanStatusLabel}>Binance Auth</span>
             <span style={{
               ...styles.scanStatusValue,
-              color: binanceAuthStatus === 'success' ? 'var(--bullish)' : binanceAuthStatus === 'pending' ? 'var(--accent-teal)' : 'var(--bearish)'
+              color: binanceAuthStatus === 'success' ? 'var(--bullish)' : binanceAuthStatus === 'pending' || binanceAuthStatus === 'unknown' ? 'var(--accent-teal)' : 'var(--bearish)'
             }}>
-              {binanceAuthStatus === 'success' ? `OK (${binanceAuthMode || 'auth'})` : binanceAuthStatus === 'pending' ? 'Pending' : 'Failed'}
+              {binanceAuthStatus === 'success'
+                ? `OK (${binanceAuthMode || 'auth'})`
+                : binanceAuthStatus === 'pending'
+                ? 'Pending'
+                : binanceAuthStatus === 'unknown'
+                ? 'Unknown'
+                : 'Failed'
+              }
             </span>
           </div>
         </div>
