@@ -280,6 +280,7 @@ class LiveTrader:
                 
         try:
             live_balance = await asyncio.to_thread(self.get_live_balance)
+            live_active_trades = await asyncio.to_thread(self.get_exchange_positions)
             await self.websocket_broadcast_callback({
                 "type": "state",
                 "data": {
@@ -287,7 +288,7 @@ class LiveTrader:
                     "symbol": selected_symbol,
                     "selected_symbol": selected_symbol,
                     "timeframe": timeframe,
-                    "active_trades": self.active_trades,
+                    "active_trades": live_active_trades,
                     "active_trade": self.active_trade,  # legacy support
                     "balance": live_balance,
                     "initial_balance": DEFAULT_INITIAL_BALANCE,
