@@ -10,6 +10,7 @@ export default defineConfig({
         target: 'ws://127.0.0.1:8005',
         ws: true,
         changeOrigin: true,
+        logLevel: 'silent',
       },
       '/config': {
         target: 'http://127.0.0.1:8005',

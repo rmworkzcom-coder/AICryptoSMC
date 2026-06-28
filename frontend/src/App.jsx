@@ -307,7 +307,10 @@ export default function App() {
     };
 
     ws.onerror = (event) => {
-      console.error('[WebSocket] error', event);
+      // Suppress Vite proxy noise and only log unexpected runtime errors.
+      if (shouldReconnectRef.current) {
+        console.debug('[WebSocket] error', event);
+      }
     };
 
     ws.onmessage = (event) => {
@@ -391,7 +394,10 @@ export default function App() {
     };
 
     ws.onclose = (event) => {
-      console.warn('[WebSocket] closed', event);
+      const isNormalClose = event && (event.code === 1000 || event.code === 1001);
+      if (!isNormalClose && shouldReconnectRef.current) {
+        console.debug('[WebSocket] closed', event);
+      }
       if (shouldReconnectRef.current) {
         reconnectTimerRef.current = window.setTimeout(connect, 3000);
       }
