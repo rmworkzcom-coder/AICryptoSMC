@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import time
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -372,7 +373,8 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         if websocket in connected_websockets:
             connected_websockets.remove(websocket)
-    except Exception:
+    except Exception as e:
+        logging.exception("WebSocket error")
         if websocket in connected_websockets:
             connected_websockets.remove(websocket)
 
