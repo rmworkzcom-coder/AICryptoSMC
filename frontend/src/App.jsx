@@ -195,6 +195,10 @@ export default function App() {
   const [latestTrend, setLatestTrend] = useState('neutral');
   const [logs, setLogs] = useState([]);
   const [apiError, setApiError] = useState(null);
+  const [binanceAuthStatus, setBinanceAuthStatus] = useState('unknown');
+  const [binanceAuthSource, setBinanceAuthSource] = useState(null);
+  const [binanceAuthMode, setBinanceAuthMode] = useState(null);
+  const [binanceAuthMessage, setBinanceAuthMessage] = useState(null);
   
   // Configuration State
   const [config, setConfig] = useState({
@@ -242,13 +246,14 @@ export default function App() {
   const consoleContainerRef = useRef(null);
 
   // Connect WebSockets
+  const backendHost = window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
   const backendProtocol = window.location.protocol === 'https:' ? 'https' : 'http';
   const websocketProtocol = window.location.protocol === 'https:' || window.location.origin.startsWith('https:') ? 'wss' : 'ws';
 
   const fetchLiveChart = useCallback(async (symbolToFetch) => {
     try {
       const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/chart?symbol=${sym}`);
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/chart?symbol=${sym}`);
       const data = await res.json();
       setLiveChartData(data.chart_data);
       setLiveStructures(data.structures);
@@ -271,7 +276,7 @@ export default function App() {
   }, []);
 
   const connectWebSocket = useCallback(function connect() {
-    const wsUrl = `${websocketProtocol}://${window.location.hostname}:${BACKEND_PORT}/ws`;
+    const wsUrl = `${websocketProtocol}://${backendHost}:${BACKEND_PORT}/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -300,6 +305,18 @@ export default function App() {
         }
         if (typeof d.portfolio_margin === 'boolean') {
           setConfig(prev => ({ ...prev, portfolio_margin: d.portfolio_margin }));
+        }
+        if (typeof d.binance_auth_status === 'string') {
+          setBinanceAuthStatus(d.binance_auth_status);
+        }
+        if (typeof d.binance_auth_source === 'string') {
+          setBinanceAuthSource(d.binance_auth_source);
+        }
+        if (typeof d.binance_auth_mode === 'string') {
+          setBinanceAuthMode(d.binance_auth_mode);
+        }
+        if (typeof d.binance_auth_message === 'string') {
+          setBinanceAuthMessage(d.binance_auth_message);
         }
         setIsScanning(false);
         if (d.selected_symbol) {
@@ -364,7 +381,7 @@ export default function App() {
 
   const fetchConfig = useCallback(async () => {
     try {
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`);
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/config`);
       const data = await res.json();
       setConfig(data);
       // Sync backtest parameters with current settings as start
@@ -386,7 +403,7 @@ export default function App() {
 
   const fetchTrades = useCallback(async () => {
     try {
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/trades`);
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/trades`);
       const data = await res.json();
       setActiveTrades(data.active_trades || {});
       setTradeHistory(data.trade_history || []);
@@ -398,7 +415,7 @@ export default function App() {
 
   const fetchLogs = useCallback(async () => {
     try {
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/logs`);
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/logs`);
       const data = await res.json();
       setLogs(data);
     } catch (e) {
@@ -442,7 +459,7 @@ export default function App() {
 
   const saveConfig = async (updatedConfig) => {
     try {
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`, {
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedConfig)
@@ -460,7 +477,7 @@ export default function App() {
 
   const startBot = async () => {
     try {
-      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/bot/start`, { method: 'POST' });
+      await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/bot/start`, { method: 'POST' });
       setBotRunning(true);
     } catch (e) {
       console.error(e);
@@ -469,7 +486,7 @@ export default function App() {
 
   const stopBot = async () => {
     try {
-      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/bot/stop`, { method: 'POST' });
+      await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/bot/stop`, { method: 'POST' });
       setBotRunning(false);
     } catch (e) {
       console.error(e);
@@ -479,7 +496,7 @@ export default function App() {
   const handleSelectSymbol = async (symbol) => {
     setSelectedSymbol(symbol);
     try {
-      await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/config`, {
+      await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selected_symbol: symbol })
@@ -494,7 +511,7 @@ export default function App() {
     setBacktesting(true);
     setBacktestResults(null);
     try {
-      const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/backtest`, {
+      const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(backtestConfig)
@@ -602,7 +619,22 @@ export default function App() {
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Next Scan In</span>
             <span style={styles.scanStatusValue}>
-              {isScanning ? 'Scanning...' : `${nextScanCountdown} sec`}
+              {botRunning && scanTotal > 0 && scanCount < scanTotal && nextScanCountdown === 0
+                ? 'Scanning...'
+                : botRunning && scanTotal > 0 && scanCount >= scanTotal && nextScanCountdown === 0
+                ? 'Ready'
+                : scanTotal === 0 && nextScanCountdown === 0
+                ? 'Idle'
+                : `${nextScanCountdown} sec`}
+            </span>
+          </div>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Binance Auth</span>
+            <span style={{
+              ...styles.scanStatusValue,
+              color: binanceAuthStatus === 'success' ? 'var(--bullish)' : binanceAuthStatus === 'pending' ? 'var(--accent-teal)' : 'var(--bearish)'
+            }}>
+              {binanceAuthStatus === 'success' ? `OK (${binanceAuthMode || 'auth'})` : binanceAuthStatus === 'pending' ? 'Pending' : 'Failed'}
             </span>
           </div>
         </div>
@@ -718,17 +750,24 @@ export default function App() {
                     </span>
                   </div>
                 </div>
-
-                <div style={styles.actionButtons}>
-                  {!botRunning ? (
-                    <button onClick={startBot} className="btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
-                      <Play size={18} fill="white" /> Start Monitoring & Trade
-                    </button>
-                  ) : (
-                    <button onClick={stopBot} className="btn-danger" style={{ width: '100%', justifyContent: 'center' }}>
-                      <Square size={18} fill="var(--bearish)" /> Stop Trading Loop
-                    </button>
-                  )}
+                <div style={styles.statusRow}>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Binance Auth</span>
+                    <span style={{
+                      ...styles.statusValue,
+                      color: binanceAuthStatus === 'success' ? 'var(--bullish)' : binanceAuthStatus === 'pending' ? 'var(--accent-teal)' : 'var(--bearish)'
+                    }}>
+                      {binanceAuthStatus === 'success'
+                        ? `OK (${binanceAuthMode || 'auth'})`
+                        : binanceAuthStatus === 'pending'
+                        ? 'Pending'
+                        : 'Failed'}
+                    </span>
+                  </div>
+                  <div style={styles.statusCell}>
+                    <span style={styles.statusLabel}>Auth Source</span>
+                    <span style={styles.statusValue}>{binanceAuthSource || 'unknown'}</span>
+                  </div>
                 </div>
               </div>
 
@@ -741,7 +780,7 @@ export default function App() {
                       onClick={async () => {
                         if (window.confirm("Are you sure you want to liquidate all active positions at their current market prices?")) {
                           try {
-                            const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/liquidate`, { method: 'POST' });
+                            const res = await fetch(`http://${backendHost}:${BACKEND_PORT}/trades/liquidate`, { method: 'POST' });
                             const data = await res.json();
                             setActiveTrades(data.active_trades || {});
                             setTradeHistory(data.trade_history || []);
@@ -789,7 +828,7 @@ export default function App() {
                                   e.stopPropagation();
                                   if (window.confirm(`Are you sure you want to liquidate the ${symbol} position?`)) {
                                     try {
-                                      const res = await fetch(`http://${window.location.hostname}:${BACKEND_PORT}/trades/liquidate?symbol=${symbol}`, { method: 'POST' });
+                                      const res = await fetch(`http://${backendHost}:${BACKEND_PORT}/trades/liquidate?symbol=${symbol}`, { method: 'POST' });
                                       const data = await res.json();
                                       setActiveTrades(data.active_trades || {});
                                       setTradeHistory(data.trade_history || []);
@@ -983,7 +1022,7 @@ export default function App() {
             onResetHistory={async () => {
               if (window.confirm(`Are you sure you want to reset your trading history? This will clear all completed trades and reset the paper balance to $${DEFAULT_INITIAL_BALANCE.toLocaleString(undefined, {minimumFractionDigits: 1})}.`)) {
                 try {
-                  const res = await fetch(`${backendProtocol}://${window.location.hostname}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
+                  const res = await fetch(`${backendProtocol}://${backendHost}:${BACKEND_PORT}/trades/reset`, { method: 'POST' });
                   const data = await res.json();
                   setTradeHistory(data.trade_history || []);
                   setBalance(data.paper_balance || DEFAULT_INITIAL_BALANCE);

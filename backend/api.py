@@ -334,6 +334,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     "is_swing_low": bool(latest_candle.get('is_swing_low', False))
                 }
                 
+        total_symbols = len(trader.config.get("symbols", []))
+        scanned_count = len(scanned_symbols_status)
+        skipped_count = max(0, total_symbols - scanned_count)
+
         await websocket.send_json({
             "type": "state",
             "data": {
@@ -347,6 +351,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 "latest_price": latest_close,
                 "latest_trend": latest_trend,
                 "scanned_symbols_status": scanned_symbols_status,
+                "scan_total": total_symbols,
+                "scan_count": scanned_count,
+                "scan_skipped": skipped_count,
+                "scan_interval_secs": trader.config.get("scan_interval_secs", 15),
+                "scan_last_broadcast_at": int(time.time() * 1000),
                 "trading_mode": trader.config.get("trading_mode", "paper"),
                 "portfolio_margin": trader.config.get("portfolio_margin", False),
                 "binance_auth_status": trader.binance_auth_status,
