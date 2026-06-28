@@ -785,6 +785,7 @@ class LiveTrader:
                     }
                     
             if isinstance(positions_raw, list):
+                self._record_external_closes(exchange_positions)
                 self.active_trades = exchange_positions
                 self.save_trades()
                 
@@ -798,6 +799,34 @@ class LiveTrader:
             logger.error(f"Error fetching live exchange positions: {e}")
             
         return self.active_trades
+
+    def _record_external_closes(self, exchange_positions: Dict[str, Dict]):
+        """Detect and record trades that were closed externally on Binance."""
+        closed_symbols = [s for s in list(self.active_trades.keys()) if s not in exchange_positions]
+        for symbol in closed_symbols:
+            local_trade = self.active_trades.get(symbol)
+            if not local_trade:
+                continue
+
+            entry_price = float(local_trade.get('entry_price', 0.0) or 0.0)
+            size = float(local_trade.get('size', 0.0) or 0.0)
+            if entry_price <= 0.0 or size <= 0.0:
+                continue
+
+            exit_price = self.get_latest_price(symbol)
+            if exit_price <= 0.0:
+                exit_price = entry_price
+
+            if local_trade.get('type') == 'long':
+                pnl = (exit_price - entry_price) * size
+            else:
+                pnl = (entry_price - exit_price) * size
+
+            self.log_message(
+                f"[{symbol}] Detected external Binance close; recording MANUAL_CLOSE at {exit_price:.8f}.",
+                "info"
+            )
+            self.close_trade(symbol, exit_price, pnl, "MANUAL_CLOSE")
 
     def has_recent_structure(self, smc_res: Dict, current_idx: int, direction: str, lookback: int = 3) -> bool:
         """
