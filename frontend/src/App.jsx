@@ -134,7 +134,7 @@ function SMCChart({ data, structures, activeTrade }) {
         lineWidth: 1.5,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `ENTRY: $${entryPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+        title: `ENTRY: $${formatPrice(entryPrice)}`,
       });
 
       candleSeries.createPriceLine({
@@ -143,7 +143,7 @@ function SMCChart({ data, structures, activeTrade }) {
         lineWidth: 1.5,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `SL: $${slPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+        title: `SL: $${formatPrice(slPrice)}`,
       });
 
       candleSeries.createPriceLine({
@@ -152,7 +152,7 @@ function SMCChart({ data, structures, activeTrade }) {
         lineWidth: 1.5,
         lineStyle: LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `TP: $${tpPrice.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`,
+        title: `TP: $${formatPrice(tpPrice)}`,
       });
     }
 
@@ -716,7 +716,7 @@ export default function App() {
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Next Scan In</span>
             <span style={styles.scanStatusValue}>
-              {botRunning && scanTotal > 0 && scanCount < scanTotal && nextScanCountdown === 0
+              {botRunning && scanTotal > 0 && nextScanCountdown === 0
                 ? 'Scanning...'
                 : scanTotal === 0 && nextScanCountdown === 0
                 ? 'Idle'
@@ -968,19 +968,19 @@ export default function App() {
                           <div style={{ ...styles.metricGrid, marginTop: '10px' }}>
                             <div>
                               <span style={styles.metricLabel}>Entry</span>
-                              <span style={styles.metricValue}>${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
+                              <span style={styles.metricValue}>${formatPrice(trade.entry_price)}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>Current</span>
-                              <span style={styles.metricValue}>${currentPriceForSymbol.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
+                              <span style={styles.metricValue}>${formatPrice(currentPriceForSymbol)}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>SL</span>
-                              <span style={{ ...styles.metricValue, color: 'var(--bearish)' }}>${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bearish)' }}>${formatPrice(trade.sl)}</span>
                             </div>
                             <div>
                               <span style={styles.metricLabel}>TP</span>
-                              <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</span>
+                              <span style={{ ...styles.metricValue, color: 'var(--bullish)' }}>${formatPrice(trade.tp)}</span>
                             </div>
                           </div>
 
@@ -1351,10 +1351,10 @@ export default function App() {
                                   {trade.type.toUpperCase()}
                                 </span>
                               </td>
-                              <td style={styles.td}>{`$${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
-                              <td style={styles.td}>{`$${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
-                              <td style={styles.td}>{`$${trade.sl.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
-                              <td style={styles.td}>{`$${trade.tp.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}`}</td>
+                              <td style={styles.td}>{`$${formatPrice(trade.entry_price)}`}</td>
+                              <td style={styles.td}>{`$${formatPrice(trade.exit_price)}`}</td>
+                              <td style={styles.td}>{`$${formatPrice(trade.sl)}`}</td>
+                              <td style={styles.td}>{`$${formatPrice(trade.tp)}`}</td>
                               <td style={{ 
                                 ...styles.td, 
                                 color: trade.pnl >= 0 ? 'var(--bullish)' : 'var(--bearish)',
@@ -1416,6 +1416,24 @@ function formatTimestamp(ts) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit'
+  });
+}
+
+function formatPrice(value) {
+  if (value === undefined || value === null || Number.isNaN(Number(value))) {
+    return '---';
+  }
+  const price = Number(value);
+  const absPrice = Math.abs(price);
+  let digits = 4;
+  if (absPrice > 0 && absPrice < 0.001) {
+    digits = 8;
+  } else if (absPrice > 0 && absPrice < 0.01) {
+    digits = 6;
+  }
+  return price.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
   });
 }
 
@@ -1724,8 +1742,8 @@ function TradingHistoryView({ tradeHistory, balance, onResetHistory }) {
                           {formatDuration(trade.entry_time, trade.exit_time)}
                         </td>
                         <td style={{ ...styles.td, fontSize: '0.85rem' }}>
-                          <div>Entry: ${trade.entry_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</div>
-                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: ${trade.exit_price.toLocaleString(undefined, {minimumFractionDigits: 4, maximumFractionDigits: 4})}</div>
+                          <div>Entry: ${formatPrice(trade.entry_price)}</div>
+                          <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>Exit: ${formatPrice(trade.exit_price)}</div>
                         </td>
                         <td style={{ ...styles.td, fontSize: '0.85rem' }}>
                           <div>Size: {trade.size.toLocaleString(undefined, {maximumFractionDigits: 6})}</div>
