@@ -37,6 +37,10 @@ class LiveTrader:
         self.running = False
         self.task = None
         self.client = None
+        self.binance_auth_status = "unknown"
+        self.binance_auth_source = None
+        self.binance_auth_message = None
+        self.binance_auth_mode = None
         
         # Multi-symbol trading state
         self.active_trades = {}  # symbol -> trade dict
@@ -294,6 +298,10 @@ class LiveTrader:
                     "scan_skipped": skipped_count,
                     "trading_mode": self.config.get("trading_mode", "paper"),
                     "portfolio_margin": self.config.get("portfolio_margin", False),
+                    "binance_auth_status": self.binance_auth_status,
+                    "binance_auth_source": self.binance_auth_source,
+                    "binance_auth_message": self.binance_auth_message,
+                    "binance_auth_mode": self.binance_auth_mode,
                     "scan_interval_secs": self.config.get("scan_interval_secs", 15),
                     "scan_last_broadcast_at": int(time.time() * 1000),
                     "trade_history": self.trade_history
@@ -341,6 +349,12 @@ class LiveTrader:
             except RuntimeError:
                 pass
 
+    def _set_auth_status(self, status: str, source: Optional[str], message: str, mode: Optional[str] = None):
+        self.binance_auth_status = status
+        self.binance_auth_source = source
+        self.binance_auth_message = message
+        self.binance_auth_mode = mode
+
     def is_placeholder_key(self, key: Optional[str]) -> bool:
         if not key:
             return True
@@ -364,6 +378,10 @@ class LiveTrader:
         if env_key and env_secret and not (
             self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
         ):
+            os.environ.setdefault("BINANCE_API_KEY", env_key)
+            os.environ.setdefault("BINANCE_KEY", env_key)
+            os.environ.setdefault("BINANCE_API_SECRET", env_secret)
+            os.environ.setdefault("BINANCE_SECRET", env_secret)
             logger.info("Loaded Binance API keys from environment variables.")
             return env_key, env_secret, "environment variables"
 
@@ -395,6 +413,10 @@ class LiveTrader:
                         if key and secret and not (
                             self.is_placeholder_key(key) or self.is_placeholder_key(secret)
                         ):
+                            os.environ.setdefault("BINANCE_API_KEY", key)
+                            os.environ.setdefault("BINANCE_KEY", key)
+                            os.environ.setdefault("BINANCE_API_SECRET", secret)
+                            os.environ.setdefault("BINANCE_SECRET", secret)
                             logger.info(f"Loaded Binance API keys from {path}")
                             return key, secret, path
                 except Exception as e:
@@ -407,6 +429,13 @@ class LiveTrader:
         api_secret = self.config.get("binance_api_secret")
         testnet = self.config.get("testnet", True)
         trading_mode = self.config.get("trading_mode", "paper")
+        portfolio_margin = self.config.get("portfolio_margin", False)
+        market_type = self.config.get("market_type", "futures")
+
+        self.binance_auth_status = "pending"
+        self.binance_auth_source = None
+        self.binance_auth_message = None
+        self.binance_auth_mode = None
         
         # Treat fake placeholder values as absent so they don't block valid env/.env keys.
         if self.is_placeholder_key(api_key) or self.is_placeholder_key(api_secret):
@@ -444,7 +473,9 @@ class LiveTrader:
             try:
                 self.client = Client(api_key, api_secret, testnet=testnet, requests_params={"timeout": 10})
                 self.log_message("Binance Client initialized successfully.")
-                self.verify_binance_connection()
+                verified = self.verify_binance_connection(source)
+                if not verified and market_type == "futures" and not portfolio_margin:
+                    self._try_portfolio_margin_fallback(source)
             except Exception as e:
                 self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "warning")
                 self.client = None
@@ -476,6 +507,30 @@ class LiveTrader:
                 body = response.text.lower()
                 if 'invalid api-key' in body or 'invalid api-key, ip, or permissions' in body:
                     return True
+        return False
+
+    def _try_portfolio_margin_fallback(self, source: str) -> bool:
+        try:
+            self.log_message(
+                "Standard futures auth failed. Attempting Portfolio Margin API auth as a fallback.",
+                "info"
+            )
+            result = self._make_papi_request("GET", "/papi/v1/balance")
+            if result is not None:
+                self.config["portfolio_margin"] = True
+                self.save_config()
+                fallback_msg = (
+                    f"Binance credentials appear valid for Portfolio Margin. "
+                    f"Enabled portfolio_margin=true and switched live trading to Portfolio Margin mode. Keys were loaded from {source}."
+                )
+                self._set_auth_status("success", source, fallback_msg, mode="portfolio_margin")
+                self.log_message(fallback_msg, "info")
+                return True
+        except Exception as e:
+            self.log_message(
+                f"Portfolio Margin fallback auth also failed: {e}",
+                "warning"
+            )
         return False
 
     def _make_papi_request(self, method: str, endpoint: str, params: dict = None) -> dict:
@@ -557,19 +612,22 @@ class LiveTrader:
         self.client = None
         self.log_message(f"Disabling live trading due to authentication failure: {reason}. Switched to paper mode.", "warning")
 
-    def verify_binance_connection(self):
+    def verify_binance_connection(self, source: str = "unknown source") -> bool:
         if self.config.get("trading_mode") != "live":
-            return
+            self._set_auth_status("unknown", source, "Live trading is not enabled.", None)
+            return False
 
         if not self.client:
-            self.log_message(
-                "Binance client is not initialized for live trading. Live mode remains enabled and will retry later.",
-                "warning"
+            msg = (
+                "Binance client is not initialized for live trading. Live mode remains enabled and will retry later."
             )
-            return
+            self.log_message(msg, "warning")
+            self._set_auth_status("failed", source, msg, None)
+            return False
 
         market_type = self.config.get("market_type", "futures")
         portfolio_margin = self.config.get("portfolio_margin", False)
+        mode = "portfolio_margin" if portfolio_margin else ("futures" if market_type == "futures" else "spot")
 
         try:
             if portfolio_margin:
@@ -580,15 +638,25 @@ class LiveTrader:
                 self.client.get_asset_balance(asset="USDT")
         except Exception as e:
             if self._is_api_unauthorized(e):
-                self.log_message(
-                    "Binance API authentication failed during validation. Live mode remains enabled so you can correct credentials or permissions.",
-                    "warning"
+                msg = (
+                    f"Binance API authentication failed during validation with keys loaded from {source}: {e}. "
+                    "Live mode remains enabled so you can correct credentials or permissions."
                 )
+                self.log_message(msg, "error")
+                self._set_auth_status("failed", source, msg, mode=mode)
             else:
-                self.log_message(
-                    f"Binance client validation failed: {e}. Live mode remains enabled and will retry later.",
-                    "warning"
+                msg = (
+                    f"Binance client validation failed with keys loaded from {source}: {e}. "
+                    "Live mode remains enabled and will retry later."
                 )
+                self.log_message(msg, "warning")
+                self._set_auth_status("warning", source, msg, mode=mode)
+            return False
+
+        msg = f"Binance API authentication verified successfully with keys loaded from {source}."
+        self.log_message(msg, "info")
+        self._set_auth_status("success", source, msg, mode=mode)
+        return True
 
     def get_live_balance(self) -> float:
         trading_mode = self.config.get("trading_mode", "paper")
@@ -632,7 +700,7 @@ class LiveTrader:
             if self._is_api_unauthorized(e):
                 self.log_message(
                     "Binance API unauthorized while fetching live balance. Live mode remains enabled so user can correct credentials or permissions.",
-                    "warning"
+                    "error"
                 )
                 return self.paper_balance
             logger.error(f"Error fetching live Binance balance: {e}")
@@ -710,7 +778,7 @@ class LiveTrader:
             if self._is_api_unauthorized(e):
                 self.log_message(
                     "Binance API unauthorized while fetching live positions. Live mode remains enabled so user can correct credentials or permissions.",
-                    "warning"
+                    "error"
                 )
                 return self.active_trades
             logger.error(f"Error fetching live exchange positions: {e}")

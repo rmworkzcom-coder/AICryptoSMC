@@ -312,12 +312,15 @@ export default function App() {
         setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
         
         const msgText = msg.data.message || '';
-        if (msg.data.level === 'ERROR' && (
-          msgText.includes('401') || 
-          msgText.includes('Unauthorized') || 
-          msgText.includes('-2015') || 
-          msgText.includes('Invalid API-key')
-        )) {
+        const lowerMsgText = msgText.toLowerCase();
+        if (
+          msg.data.level === 'ERROR' ||
+          (msg.data.level === 'WARNING' && (
+            lowerMsgText.includes('unauthorized') ||
+            lowerMsgText.includes('invalid api-key') ||
+            lowerMsgText.includes('invalid api-key, ip, or permissions')
+          ))
+        ) {
           setApiError(msgText);
           showNotification('⚠️ AICryptoSMC API Error', msgText);
         }

@@ -153,7 +153,13 @@ def get_status():
         "active_trade": trader.active_trade,  # legacy support
         "latest_price": latest_close,
         "latest_trend": latest_trend,
-        "scanned_symbols_status": scanned_symbols_status
+        "scanned_symbols_status": scanned_symbols_status,
+        "trading_mode": trader.config.get("trading_mode", "paper"),
+        "portfolio_margin": trader.config.get("portfolio_margin", False),
+        "binance_auth_status": trader.binance_auth_status,
+        "binance_auth_source": trader.binance_auth_source,
+        "binance_auth_message": trader.binance_auth_message,
+        "binance_auth_mode": trader.binance_auth_mode
     }
 
 @app.get("/trades")
@@ -341,6 +347,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 "latest_price": latest_close,
                 "latest_trend": latest_trend,
                 "scanned_symbols_status": scanned_symbols_status,
+                "trading_mode": trader.config.get("trading_mode", "paper"),
+                "portfolio_margin": trader.config.get("portfolio_margin", False),
+                "binance_auth_status": trader.binance_auth_status,
+                "binance_auth_source": trader.binance_auth_source,
+                "binance_auth_message": trader.binance_auth_message,
+                "binance_auth_mode": trader.binance_auth_mode,
                 "trade_history": trader.trade_history
             }
         })
