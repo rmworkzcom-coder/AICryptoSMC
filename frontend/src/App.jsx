@@ -239,6 +239,7 @@ export default function App() {
     x_impulse: 2.0,
     m_range: 5,
     breakeven_trigger: 1.0,
+    peak_drawdown_exit_pct: 4.0,
     portfolio_margin: false
   });
 
@@ -425,7 +426,11 @@ export default function App() {
     try {
       const res = await fetch('/config');
       const data = await res.json();
-      setConfig(data);
+      setConfig(prev => ({
+        ...prev,
+        ...data,
+        peak_drawdown_exit_pct: typeof data.peak_drawdown_exit_pct === 'number' ? data.peak_drawdown_exit_pct : prev.peak_drawdown_exit_pct
+      }));
       // Sync backtest parameters with current settings as start
       setBacktestConfig(prev => ({
         ...prev,
@@ -994,7 +999,7 @@ export default function App() {
                               <span style={styles.metricValue}>{Number(trade.size).toLocaleString(undefined, { maximumFractionDigits: 6 })} {symbol.replace('USDT', '')}</span>
                             </div>
                             <div>
-                              <span style={styles.metricLabel}>Position Value</span>
+                              <span style={styles.metricLabel}>Invested</span>
                               <span style={styles.metricValue}>${formatPrice(positionValue)}</span>
                             </div>
                           </div>
@@ -1968,6 +1973,20 @@ function SettingsPanel({ config, saveConfig }) {
             className="form-input"
             onChange={e => setLocalConfig(prev => ({ ...prev, rr_ratio: parseFloat(e.target.value) || 2.0 }))}
           />
+        </div>
+
+        <div className="form-group">
+          <label>Peak Drawdown Exit (%)</label>
+          <input 
+            type="number" 
+            step="0.1"
+            value={localConfig.peak_drawdown_exit_pct ?? 4.0} 
+            className="form-input"
+            onChange={e => setLocalConfig(prev => ({ ...prev, peak_drawdown_exit_pct: parseFloat(e.target.value) || 4.0 }))}
+          />
+          <small style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+            Close a winning trade if it pulls back more than this percentage from its peak.
+          </small>
         </div>
 
         <div className="form-group">

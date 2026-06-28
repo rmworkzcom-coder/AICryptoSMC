@@ -1169,6 +1169,30 @@ class LiveTrader:
             trailing_activation = self.config.get("trailing_stop_activation_pct", 0.0)
             trailing_distance = self.config.get("trailing_stop_distance_pct", 0.0)
             
+            # Peak drawdown exit on a profitable trade: close if price drops > threshold from the highest/lowest peak reached.
+            peak_drawdown_exit_pct = self.config.get("peak_drawdown_exit_pct", 4.0)
+            if peak_drawdown_exit_pct > 0.0:
+                if trade_type == 'long':
+                    drawdown_pct = ((peak_price - current_low) / peak_price) * 100.0
+                    if drawdown_pct >= peak_drawdown_exit_pct:
+                        pnl = (current_low - entry_price) * size
+                        self.paper_balance += pnl
+                        self.log_message(
+                            f"[{symbol}] Peak drawdown exit triggered at {current_low:.8f} after {drawdown_pct:.2f}% drop from peak {peak_price:.8f}."
+                        )
+                        self.close_trade(symbol, current_low, pnl, "PEAK_DRAWDOWN")
+                        return
+                elif trade_type == 'short':
+                    drawup_pct = ((current_high - peak_price) / peak_price) * 100.0
+                    if drawup_pct >= peak_drawdown_exit_pct:
+                        pnl = (entry_price - current_high) * size
+                        self.paper_balance += pnl
+                        self.log_message(
+                            f"[{symbol}] Peak drawup exit triggered at {current_high:.8f} after {drawup_pct:.2f}% rise from trough {peak_price:.8f}."
+                        )
+                        self.close_trade(symbol, current_high, pnl, "PEAK_DRAWDOWN")
+                        return
+
             if trailing_activation > 0.0 and trailing_distance > 0.0:
                 if trade_type == 'long':
                     profit_pct = ((peak_price - entry_price) / entry_price) * 100.0

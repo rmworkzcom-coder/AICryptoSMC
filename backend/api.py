@@ -133,6 +133,7 @@ class ConfigUpdate(BaseModel):
     x_impulse: Optional[float] = None
     m_range: Optional[int] = None
     breakeven_trigger: Optional[float] = None
+    peak_drawdown_exit_pct: Optional[float] = None
     max_trade_loss_pct: Optional[float] = None
     max_active_trades: Optional[int] = None
     selected_symbol: Optional[str] = None
