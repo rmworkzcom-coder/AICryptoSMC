@@ -52,6 +52,7 @@ class LiveTrader:
         self.df = None  # selected or fallback dataframe (for backwards compatibility)
         self.dfs = {}   # symbol -> dataframe
         self.websocket_broadcast_callback = None
+        self.scan_cycle_count = 0
         
         self.trades_file = os.path.join(os.path.dirname(config_path), "trades.json")
         self.load_trades()

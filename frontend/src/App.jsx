@@ -718,8 +718,6 @@ export default function App() {
             <span style={styles.scanStatusValue}>
               {botRunning && scanTotal > 0 && scanCount < scanTotal && nextScanCountdown === 0
                 ? 'Scanning...'
-                : botRunning && scanTotal > 0 && scanCount >= scanTotal && nextScanCountdown === 0
-                ? 'Ready'
                 : scanTotal === 0 && nextScanCountdown === 0
                 ? 'Idle'
                 : `${nextScanCountdown} sec`}
