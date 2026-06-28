@@ -306,6 +306,7 @@ class LiveTrader:
                     "binance_auth_mode": self.binance_auth_mode,
                     "scan_interval_secs": self.config.get("scan_interval_secs", 15),
                     "scan_last_broadcast_at": int(time.time() * 1000),
+                    "scan_cycle_count": self.scan_cycle_count,
                     "trade_history": self.trade_history
                 }
             })
@@ -1094,6 +1095,7 @@ class LiveTrader:
                 
                 # 3. Broadcast state to UI
                 await self.broadcast_current_state()
+                self.scan_cycle_count += 1
 
                 # Log scan tick summary
                 elapsed = time.time() - start_time

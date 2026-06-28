@@ -5,7 +5,7 @@ export default defineConfig({
     allowedHosts: ['multivalent-sonya-chopfallen.ngrok-free.dev'],
     port: 3009,
     proxy: {
-      '/ws': {
+      '/api/ws': {
         target: 'ws://127.0.0.1:8005',
         ws: true,
         changeOrigin: true,

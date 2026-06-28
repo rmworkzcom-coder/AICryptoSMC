@@ -108,6 +108,7 @@ def build_state_payload() -> Dict:
         "scan_total": total_symbols,
         "scan_count": scanned_count,
         "scan_skipped": skipped_count,
+        "scan_cycle_count": trader.scan_cycle_count,
         "trading_mode": trader.config.get("trading_mode", "paper"),
         "portfolio_margin": trader.config.get("portfolio_margin", False),
         "binance_auth_status": trader.binance_auth_status,
@@ -323,7 +324,7 @@ def get_logs(lines: int = 100):
     except Exception as e:
         return [{"time": "", "level": "ERROR", "message": f"Failed to read logs: {e}"}]
 
-@app.websocket("/ws")
+@app.websocket("/api/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_websockets.append(websocket)

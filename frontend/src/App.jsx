@@ -185,6 +185,7 @@ export default function App() {
   const [scanCount, setScanCount] = useState(0);
   const [scanTotal, setScanTotal] = useState(0);
   const [scanSkipped, setScanSkipped] = useState(0);
+  const [scanCycleCount, setScanCycleCount] = useState(0);
   const [nextScanCountdown, setNextScanCountdown] = useState(15);
   const [scanIntervalSeconds, setScanIntervalSeconds] = useState(15);
   const [scanLastBroadcastAt, setScanLastBroadcastAt] = useState(Date.now());
@@ -270,7 +271,7 @@ export default function App() {
 
   // Connect WebSockets through the frontend host so Vite can proxy local backend traffic.
   const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const websocketUrl = `${websocketProtocol}://${window.location.host}/ws`;
+  const websocketUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
 
   const fetchLiveChart = useCallback(async (symbolToFetch) => {
     try {
@@ -314,16 +315,17 @@ export default function App() {
       if (msg.type === 'state') {
         const d = msg.data;
         setBotRunning(d.running);
-        setBotTimeframe(d.timeframe);
-        setBalance(d.balance);
-        setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : DEFAULT_INITIAL_BALANCE);
+        setBotTimeframe(d.timeframe || botTimeframe);
+        setBalance(d.balance || d.paper_balance || balance);
+        setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : initialBalance);
         setActiveTrades(d.active_trades || {});
-        setLatestPrice(d.latest_price);
-        setLatestTrend(d.latest_trend);
+        setLatestPrice(d.latest_price || latestPrice);
+        setLatestTrend(d.latest_trend || latestTrend);
         setScannedSymbolsStatus(d.scanned_symbols_status || {});
         setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
         setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : 0);
         setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : 0);
+        setScanCycleCount(typeof d.scan_cycle_count === 'number' ? d.scan_cycle_count : 0);
         if (typeof d.scan_interval_secs === 'number') {
           setScanIntervalSeconds(d.scan_interval_secs);
         }
@@ -335,6 +337,12 @@ export default function App() {
         }
         if (typeof d.portfolio_margin === 'boolean') {
           setConfig(prev => ({ ...prev, portfolio_margin: d.portfolio_margin }));
+        }
+        if (typeof d.selected_symbol === 'string') {
+          setSelectedSymbol(d.selected_symbol);
+        }
+        if (typeof d.symbol === 'string') {
+          setConfig(prev => ({ ...prev, symbol: d.symbol }));
         }
         if (typeof d.binance_auth_status === 'string') {
           setBinanceAuthStatus(d.binance_auth_status);
@@ -349,9 +357,6 @@ export default function App() {
           setBinanceAuthMessage(d.binance_auth_message);
         }
         setIsScanning(false);
-        if (d.selected_symbol) {
-          setSelectedSymbol(d.selected_symbol);
-        }
         if (d.trade_history) {
           setTradeHistory(d.trade_history);
         }
@@ -474,6 +479,12 @@ export default function App() {
       if (typeof data.portfolio_margin === 'boolean') {
         setConfig(prev => ({ ...prev, portfolio_margin: data.portfolio_margin }));
       }
+      if (typeof data.selected_symbol === 'string') {
+        setSelectedSymbol(data.selected_symbol);
+      }
+      if (typeof data.symbol === 'string') {
+        setConfig(prev => ({ ...prev, symbol: data.symbol }));
+      }
       if (typeof data.binance_auth_status === 'string') {
         setBinanceAuthStatus(data.binance_auth_status);
       }
@@ -507,6 +518,7 @@ export default function App() {
 
   useEffect(() => {
     connectWebSocket();
+    fetchStatus();
     fetchConfig();
     fetchTrades();
     fetchLogs();
@@ -518,7 +530,7 @@ export default function App() {
         window.clearTimeout(reconnectTimerRef.current);
       }
     };
-  }, [connectWebSocket, fetchConfig, fetchTrades, fetchLogs]);
+  }, [connectWebSocket, fetchStatus, fetchConfig, fetchTrades, fetchLogs]);
 
   useEffect(() => {
     fetchLiveChart(selectedSymbol);
@@ -687,7 +699,7 @@ export default function App() {
       {activeTab === 'live' && (
         <div style={styles.scanStatusBarTop}>
           <div style={styles.scanStatusItem}>
-            <span style={styles.scanStatusLabel}>Scan Progress</span>
+            <span style={styles.scanStatusLabel}>Scan Progress ({scanCycleCount})</span>
             <span style={styles.scanStatusValue}>{scanCount} / {scanTotal}</span>
             <div style={styles.scanProgressTrack}>
               <div style={{ ...styles.scanProgressFill, width: `${Math.round((scanCount / (scanTotal || 1)) * 100)}%` }} />
