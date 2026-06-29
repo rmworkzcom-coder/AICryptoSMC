@@ -436,7 +436,7 @@ export default function App() {
         reconnectTimerRef.current = window.setTimeout(connect, 3000);
       }
     };
-  }, [showNotification, websocketUrl, fetchStatus]);
+  }, [showNotification, websocketProxyUrl, websocketDirectUrl]);
 
   const scrollToBottom = useCallback(() => {
     if (consoleContainerRef.current) {
