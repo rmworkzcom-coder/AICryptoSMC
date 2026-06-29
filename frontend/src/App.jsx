@@ -226,6 +226,8 @@ export default function App() {
   const [binanceAuthSource, setBinanceAuthSource] = useState(null);
   const [binanceAuthMode, setBinanceAuthMode] = useState(null);
   const [binanceAuthMessage, setBinanceAuthMessage] = useState(null);
+  const [websocketStatus, setWebsocketStatus] = useState('disconnected');
+  const [websocketUrl, setWebsocketUrl] = useState(websocketProxyUrl);
   
   const [statusLoaded, setStatusLoaded] = useState(false);
   
@@ -324,119 +326,142 @@ export default function App() {
     }
   }, []);
 
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
   const connectWebSocket = useCallback(function connect(useDirect = false) {
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      wsRef.current.close();
+    }
+    clearReconnectTimer();
+
     const targetUrl = useDirect && websocketDirectUrl ? websocketDirectUrl : websocketProxyUrl;
+    setWebsocketUrl(targetUrl);
+    setWebsocketStatus('connecting');
+
     const ws = new WebSocket(targetUrl);
     wsRef.current = ws;
     wsRef.currentUrl = targetUrl;
 
     ws.onopen = () => {
+      clearReconnectTimer();
+      setWebsocketStatus('open');
       console.debug('[WebSocket] connection opened', targetUrl);
     };
 
     ws.onerror = (event) => {
-      if (shouldReconnectRef.current) {
-        console.debug('[WebSocket] error', event, 'url=', targetUrl);
-        if (!useDirect && websocketDirectUrl) {
-          reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
-        } else {
-          reconnectTimerRef.current = window.setTimeout(connect, 3000);
-        }
+      console.debug('[WebSocket] error', event, 'url=', targetUrl);
+      setWebsocketStatus('error');
+      if (!shouldReconnectRef.current) {
+        return;
+      }
+      if (!useDirect && websocketDirectUrl) {
+        reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
+      } else {
+        reconnectTimerRef.current = window.setTimeout(connect, 3000);
       }
     };
 
     ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'state') {
-        const d = msg.data;
-        setBotRunning(Boolean(d.running));
-        setBotTimeframe(d.timeframe || botTimeframe);
-        setBalance(d.balance || d.paper_balance || balance);
-        setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : initialBalance);
-        setActiveTrades(d.active_trades || {});
-        setLatestPrice(d.latest_price || latestPrice);
-        setLatestTrend(d.latest_trend || latestTrend);
-        setScannedSymbolsStatus(d.scanned_symbols_status || {});
-        setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
-        setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : 0);
-        setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : 0);
-        setSignalsFound(typeof d.signals_found === 'number' ? d.signals_found : 0);
-        setOpenTradesCreated(typeof d.open_trades_created === 'number' ? d.open_trades_created : 0);
-        setScanCycleCount(typeof d.scan_cycle_count === 'number' ? d.scan_cycle_count : 0);
-        if (typeof d.scan_interval_secs === 'number') {
-          setScanIntervalSeconds(d.scan_interval_secs);
-        }
-        if (typeof d.scan_last_broadcast_at === 'number') {
-          setScanLastBroadcastAt(d.scan_last_broadcast_at);
-        }
-        if (typeof d.trading_mode === 'string') {
-          setConfig(prev => ({ ...prev, trading_mode: d.trading_mode }));
-        }
-        if (typeof d.portfolio_margin === 'boolean') {
-          setConfig(prev => ({ ...prev, portfolio_margin: d.portfolio_margin }));
-        }
-        if (typeof d.selected_symbol === 'string') {
-          setSelectedSymbol(d.selected_symbol);
-        }
-        if (typeof d.symbol === 'string') {
-          setConfig(prev => ({ ...prev, symbol: d.symbol }));
-        }
-        if (typeof d.binance_auth_status === 'string') {
-          setBinanceAuthStatus(d.binance_auth_status);
-        }
-        if (typeof d.binance_auth_source === 'string') {
-          setBinanceAuthSource(d.binance_auth_source);
-        }
-        if (typeof d.binance_auth_mode === 'string') {
-          setBinanceAuthMode(d.binance_auth_mode);
-        }
-        if (typeof d.binance_auth_message === 'string') {
-          setBinanceAuthMessage(d.binance_auth_message);
-        }
-        setIsScanning(false);
-        if (d.trade_history) {
-          setTradeHistory(d.trade_history);
-        }
-      } else if (msg.type === 'log') {
-        setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
-        
-        const msgText = msg.data.message || '';
-        const lowerMsgText = msgText.toLowerCase();
-        if (
-          msg.data.level === 'ERROR' ||
-          (msg.data.level === 'WARNING' && (
-            lowerMsgText.includes('unauthorized') ||
-            lowerMsgText.includes('invalid api-key') ||
-            lowerMsgText.includes('invalid api-key, ip, or permissions')
-          ))
-        ) {
-          setApiError(msgText);
-          showNotification('⚠️ AICryptoSMC API Error', msgText);
-        }
+      try {
+        const msg = JSON.parse(event.data);
 
-        // Notify on trade open / close messages
-        if (msg.data.level === 'INFO' && (
-          msgText.includes('OPENED') ||
-          msgText.includes('LIQUIDATED') ||
-          msgText.includes('Closed position') ||
-          msgText.includes('Take Profit') ||
-          msgText.includes('Stop Loss')
-        )) {
-          showNotification('📈 AICryptoSMC Trade Alert', msgText);
+        if (msg.type === 'state') {
+          const d = msg.data;
+          setBotRunning(Boolean(d.running));
+          setBotTimeframe(d.timeframe || botTimeframe);
+          setBalance(d.balance || d.paper_balance || balance);
+          setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : initialBalance);
+          setActiveTrades(d.active_trades || {});
+          setLatestPrice(d.latest_price || latestPrice);
+          setLatestTrend(d.latest_trend || latestTrend);
+          setScannedSymbolsStatus(d.scanned_symbols_status || {});
+          setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
+          setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : 0);
+          setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : 0);
+          setSignalsFound(typeof d.signals_found === 'number' ? d.signals_found : 0);
+          setOpenTradesCreated(typeof d.open_trades_created === 'number' ? d.open_trades_created : 0);
+          setScanCycleCount(typeof d.scan_cycle_count === 'number' ? d.scan_cycle_count : 0);
+          if (typeof d.scan_interval_secs === 'number') {
+            setScanIntervalSeconds(d.scan_interval_secs);
+          }
+          if (typeof d.scan_last_broadcast_at === 'number') {
+            setScanLastBroadcastAt(d.scan_last_broadcast_at);
+          }
+          if (typeof d.trading_mode === 'string') {
+            setConfig(prev => ({ ...prev, trading_mode: d.trading_mode }));
+          }
+          if (typeof d.portfolio_margin === 'boolean') {
+            setConfig(prev => ({ ...prev, portfolio_margin: d.portfolio_margin }));
+          }
+          if (typeof d.selected_symbol === 'string') {
+            setSelectedSymbol(d.selected_symbol);
+          }
+          if (typeof d.symbol === 'string') {
+            setConfig(prev => ({ ...prev, symbol: d.symbol }));
+          }
+          if (typeof d.binance_auth_status === 'string') {
+            setBinanceAuthStatus(d.binance_auth_status);
+          }
+          if (typeof d.binance_auth_source === 'string') {
+            setBinanceAuthSource(d.binance_auth_source);
+          }
+          if (typeof d.binance_auth_mode === 'string') {
+            setBinanceAuthMode(d.binance_auth_mode);
+          }
+          if (typeof d.binance_auth_message === 'string') {
+            setBinanceAuthMessage(d.binance_auth_message);
+          }
+          setIsScanning(false);
+          if (d.trade_history) {
+            setTradeHistory(d.trade_history);
+          }
+        } else if (msg.type === 'log') {
+          setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
+
+          const msgText = msg.data.message || '';
+          const lowerMsgText = msgText.toLowerCase();
+          if (
+            msg.data.level === 'ERROR' ||
+            (msg.data.level === 'WARNING' && (
+              lowerMsgText.includes('unauthorized') ||
+              lowerMsgText.includes('invalid api-key') ||
+              lowerMsgText.includes('invalid api-key, ip, or permissions')
+            ))
+          ) {
+            setApiError(msgText);
+            showNotification('⚠️ AICryptoSMC API Error', msgText);
+          }
+
+          // Notify on trade open / close messages
+          if (msg.data.level === 'INFO' && (
+            msgText.includes('OPENED') ||
+            msgText.includes('LIQUIDATED') ||
+            msgText.includes('Closed position') ||
+            msgText.includes('Take Profit') ||
+            msgText.includes('Stop Loss')
+          )) {
+            showNotification('📈 AICryptoSMC Trade Alert', msgText);
+          }
         }
+      } catch (err) {
+        console.warn('[WebSocket] failed to parse message', err, event.data);
       }
     };
 
     ws.onclose = (event) => {
-      const isNormalClose = event && (event.code === 1000 || event.code === 1001);
-      if (!isNormalClose && shouldReconnectRef.current) {
-        console.debug('[WebSocket] closed', event, 'url=', targetUrl);
-      }
+      clearReconnectTimer();
+      setWebsocketStatus('closed');
       if (shouldReconnectRef.current) {
+        console.debug('[WebSocket] closed', event, 'url=', targetUrl);
         reconnectTimerRef.current = window.setTimeout(connect, 3000);
       }
     };
-  }, [showNotification, websocketProxyUrl, websocketDirectUrl]);
+  }, [clearReconnectTimer, showNotification, websocketProxyUrl, websocketDirectUrl]);
 
   const scrollToBottom = useCallback(() => {
     if (consoleContainerRef.current) {
@@ -2210,7 +2235,7 @@ const styles = {
   scanStatusBarTop: {
     display: 'flex',
     flexDirection: 'row',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     alignItems: 'stretch',
     gap: '16px',
     padding: '16px 20px',
@@ -2238,10 +2263,10 @@ const styles = {
   scanStatusItem: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
-    flex: '0 0 170px',
-    minWidth: '170px',
-    maxWidth: '220px',
+    gap: '4px',
+    flex: '1 1 170px',
+    minWidth: '150px',
+    maxWidth: '240px',
   },
   scanStatusLabel: {
     fontSize: '0.62rem',
@@ -2268,6 +2293,14 @@ const styles = {
     color: 'var(--text-main)',
     fontWeight: '700',
     lineHeight: '1.1',
+  },
+  scanStatusSecondary: {
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+    lineHeight: '1.2',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   scanSkippedLabel: {
     fontSize: '0.8rem',

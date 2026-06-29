@@ -1294,8 +1294,9 @@ class LiveTrader:
             # Peak profit retracement exit
             peak_profit_retrace_pct = self.config.get("peak_profit_retrace_pct", 20.0)
             peak_profit_retrace_min_usd = self.config.get("peak_profit_retrace_min_usd", 0.0)
+            min_profit_to_keep_usd = float(self.config.get("min_profit_to_keep_usd", 1.0))
             risk_amount = float(trade.get('risk_amount', 0.0) or 0.0)
-            effective_peak_profit_retrace_min_usd = max(peak_profit_retrace_min_usd, risk_amount * 0.25)
+            effective_peak_profit_retrace_min_usd = max(peak_profit_retrace_min_usd, risk_amount * 0.25, min_profit_to_keep_usd)
             if peak_profit_retrace_pct > 0.0 and effective_peak_profit_retrace_min_usd > 0.0:
                 if trade_type == 'long':
                     peak_pnl = (peak_price - entry_price) * size
@@ -1304,21 +1305,28 @@ class LiveTrader:
                     peak_pnl = (entry_price - peak_price) * size
                     current_pnl = (entry_price - current_high) * size
 
-                if peak_pnl > 0.0 and peak_pnl >= effective_peak_profit_retrace_min_usd:
+                if peak_pnl > 0.0:
                     retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
                     # Avoid retrace thresholds smaller than half the original risk amount.
                     if risk_amount > 0.0:
                         retrace_threshold = max(retrace_threshold, peak_pnl - (risk_amount * 0.5))
-                    if current_pnl <= retrace_threshold:
+
+                    should_close = False
+                    if peak_pnl >= effective_peak_profit_retrace_min_usd and current_pnl <= retrace_threshold:
+                        should_close = True
+                    if peak_pnl >= min_profit_to_keep_usd and current_pnl <= min_profit_to_keep_usd:
+                        should_close = True
+
+                    if should_close:
                         self.log_message(
-                            f"[{symbol}] Peak profit retracement exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "
+                            f"[{symbol}] Profit retrace exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "
                             f"Peak PnL: {peak_pnl:.2f}, Current PnL: {current_pnl:.2f}, "
-                            f"threshold: {retrace_threshold:.2f}."
+                            f"retrace threshold: {retrace_threshold:.2f}, min keep profit: {min_profit_to_keep_usd:.2f}."
                         )
                         pnl = current_pnl
                         self.paper_balance += pnl
                         exit_price = current_low if trade_type == 'long' else current_high
-                        self.close_trade(symbol, exit_price, pnl, "PEAK_PROFIT_RETRACE")
+                        self.close_trade(symbol, exit_price, pnl, "PROFIT_RETRACE")
                         return
 
             # Immediate risk amount exit
@@ -1470,6 +1478,10 @@ class LiveTrader:
             # Hard loss cap exit
             max_trade_loss_pct = self.config.get("max_trade_loss_pct", 0.0)
             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+            mark_price = float(trade.get("mark_price", 0.0) or 0.0)
+            if mark_price <= 0.0:
+                mark_price = current_price
+
             if max_trade_loss_pct > 0.0:
                 if trade_type == 'long':
                     worst_price = min(current_price, current_low)
@@ -1495,32 +1507,32 @@ class LiveTrader:
                 total_drag_rate = fee_rate + slippage_rate
 
                 if trade_type == 'long':
-                    worst_price = min(current_price, current_low)
-                    loss_usd = (entry_price - worst_price) * size
-                    estimated_drag = (entry_price + worst_price) * size * total_drag_rate
+                    loss_price = mark_price
+                    loss_usd = max(0.0, (entry_price - loss_price) * size)
+                    estimated_drag = (entry_price + loss_price) * size * total_drag_rate
                     estimated_net_loss = loss_usd + estimated_drag
                     if estimated_net_loss >= max_trade_loss_usd:
-                        pnl = (worst_price - entry_price) * size
+                        pnl = (loss_price - entry_price) * size
                         self.paper_balance += pnl
                         self.log_message(
-                            f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} raw loss "
+                            f"[{symbol}] HARD LOSS CAP triggered at mark price {loss_price:.8f} after ${loss_usd:.2f} raw loss "
                             f"and estimated ${estimated_drag:.2f} drag (net ${estimated_net_loss:.2f}). Exiting LONG trade."
                         )
-                        self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
+                        self.close_trade(symbol, loss_price, pnl, "HARD_LOSS_CAP")
                         return
                 elif trade_type == 'short':
-                    worst_price = max(current_price, current_high)
-                    loss_usd = (worst_price - entry_price) * size
-                    estimated_drag = (entry_price + worst_price) * size * total_drag_rate
+                    loss_price = mark_price
+                    loss_usd = max(0.0, (loss_price - entry_price) * size)
+                    estimated_drag = (entry_price + loss_price) * size * total_drag_rate
                     estimated_net_loss = loss_usd + estimated_drag
                     if estimated_net_loss >= max_trade_loss_usd:
-                        pnl = (entry_price - worst_price) * size
+                        pnl = (entry_price - loss_price) * size
                         self.paper_balance += pnl
                         self.log_message(
-                            f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} raw loss "
+                            f"[{symbol}] HARD LOSS CAP triggered at mark price {loss_price:.8f} after ${loss_usd:.2f} raw loss "
                             f"and estimated ${estimated_drag:.2f} drag (net ${estimated_net_loss:.2f}). Exiting SHORT trade."
                         )
-                        self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
+                        self.close_trade(symbol, loss_price, pnl, "HARD_LOSS_CAP")
                         return
 
             # Read SL again
