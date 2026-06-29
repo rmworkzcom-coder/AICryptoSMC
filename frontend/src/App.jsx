@@ -278,7 +278,9 @@ export default function App() {
 
   // Connect WebSockets through the frontend host so Vite can proxy local backend traffic.
   const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const websocketUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
+  const websocketProxyUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
+  const isLocalDevHost = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+  const websocketDirectUrl = isLocalDevHost ? `${websocketProtocol}://127.0.0.1:8005/api/ws` : null;
 
   const safeFetchJson = useCallback(async (url, options = {}, fallback = null) => {
     try {
@@ -322,19 +324,24 @@ export default function App() {
     }
   }, []);
 
-  const connectWebSocket = useCallback(function connect() {
-    const ws = new WebSocket(websocketUrl);
+  const connectWebSocket = useCallback(function connect(useDirect = false) {
+    const targetUrl = useDirect && websocketDirectUrl ? websocketDirectUrl : websocketProxyUrl;
+    const ws = new WebSocket(targetUrl);
     wsRef.current = ws;
+    wsRef.currentUrl = targetUrl;
 
     ws.onopen = () => {
-      console.debug('[WebSocket] connection opened', websocketUrl);
+      console.debug('[WebSocket] connection opened', targetUrl);
     };
 
     ws.onerror = (event) => {
-      // Suppress Vite proxy noise and only log unexpected runtime errors.
       if (shouldReconnectRef.current) {
-        console.debug('[WebSocket] error', event);
-        fetchStatus();
+        console.debug('[WebSocket] error', event, 'url=', targetUrl);
+        if (!useDirect && websocketDirectUrl) {
+          reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
+        } else {
+          reconnectTimerRef.current = window.setTimeout(connect, 3000);
+        }
       }
     };
 
@@ -423,7 +430,7 @@ export default function App() {
     ws.onclose = (event) => {
       const isNormalClose = event && (event.code === 1000 || event.code === 1001);
       if (!isNormalClose && shouldReconnectRef.current) {
-        console.debug('[WebSocket] closed', event);
+        console.debug('[WebSocket] closed', event, 'url=', targetUrl);
       }
       if (shouldReconnectRef.current) {
         reconnectTimerRef.current = window.setTimeout(connect, 3000);
@@ -760,11 +767,13 @@ export default function App() {
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Next Scan In</span>
             <span style={styles.scanStatusValue}>
-              {botRunning && scanTotal > 0 && nextScanCountdown === 0
-                ? 'Scanning...'
-                : scanTotal === 0 && nextScanCountdown === 0
+              {!botRunning
                 ? 'Idle'
-                : `${nextScanCountdown} sec`}
+                : scanTotal === 0
+                  ? 'Waiting...'
+                  : nextScanCountdown === 0
+                    ? 'Scanning...'
+                    : `${nextScanCountdown} sec`}
             </span>
           </div>
           <div style={styles.scanStatusItem}>

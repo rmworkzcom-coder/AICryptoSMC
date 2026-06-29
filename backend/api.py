@@ -91,7 +91,7 @@ def build_state_payload() -> Dict:
     
     total_symbols = trader.scan_total or len(trader.config.get("symbols", []))
     scanned_count = trader.scan_progress if trader.scan_progress > 0 else len(scanned_symbols_status)
-    skipped_count = trader.skipped_symbols if trader.scan_progress > 0 else 0
+    skipped_count = trader.skipped_symbols if trader.scan_progress > 0 else (max(0, total_symbols - len(scanned_symbols_status)) if scanned_symbols_status else 0)
 
     active_trades = trader.active_trades
     balance = trader.paper_balance
