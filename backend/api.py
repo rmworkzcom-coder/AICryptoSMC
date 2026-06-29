@@ -108,26 +108,9 @@ def build_state_payload() -> Dict:
         "scan_total": total_symbols,
         "scan_count": scanned_count,
         "scan_skipped": skipped_count,
-        "scan_cycle_count": trader.scan_cycle_count,
-        "trading_mode": trader.config.get("trading_mode", "paper"),
-        "portfolio_margin": trader.config.get("portfolio_margin", False),
-        "binance_auth_status": trader.binance_auth_status,
-        "binance_auth_source": trader.binance_auth_source,
-        "binance_auth_message": trader.binance_auth_message,
-        "binance_auth_mode": trader.binance_auth_mode,
-        "scan_interval_secs": trader.config.get("scan_interval_secs", 15),
-        "scan_last_broadcast_at": int(time.time() * 1000),
-        "trade_history": trader.trade_history
-    }
-
-class ConfigUpdate(BaseModel):
-    binance_api_key: Optional[str] = None
-    binance_api_secret: Optional[str] = None
-    testnet: Optional[bool] = None
-    trading_mode: Optional[str] = None
-    symbol: Optional[str] = None
-    timeframe: Optional[str] = None
-    risk_pct: Optional[float] = None
+            "signals_found": trader.signals_found,
+            "open_trades_created": trader.open_trades_created,
+            "skipped_symbols": trader.skipped_symbols,
     rr_ratio: Optional[float] = None
     n_swing: Optional[int] = None
     x_impulse: Optional[float] = None
