@@ -997,19 +997,24 @@ class LiveTrader:
             )
             self.close_trade(symbol, exit_price, pnl, "MANUAL_CLOSE")
 
-    def has_recent_structure(self, smc_res: Dict, current_idx: int, direction: str, lookback: int = 3) -> bool:
+    def get_recent_structures(self, smc_res: Dict, current_idx: int, direction: str, lookback: int = 3) -> List[Dict[str, Any]]:
         """
-        Returns True if a recent bullish/bearish BOS or CHoCH occurred within the lookback window.
+        Returns recent bullish/bearish BOS or CHoCH structures within the lookback window.
         """
         structures = []
         structures.extend(smc_res.get('bos', []))
         structures.extend(smc_res.get('choch', []))
-        for struct in structures:
-            if struct.get('type') == direction:
-                idx = int(struct.get('idx', -999))
-                if current_idx - lookback <= idx <= current_idx:
-                    return True
-        return False
+        return [
+            struct for struct in structures
+            if struct.get('type') == direction
+            and current_idx - lookback <= int(struct.get('idx', -999)) <= current_idx
+        ]
+
+    def has_recent_structure(self, smc_res: Dict, current_idx: int, direction: str, lookback: int = 3) -> bool:
+        """
+        Returns True if a recent bullish/bearish BOS or CHoCH occurred within the lookback window.
+        """
+        return len(self.get_recent_structures(smc_res, current_idx, direction, lookback)) > 0
 
     def check_daily_drawdown(self) -> bool:
         """
