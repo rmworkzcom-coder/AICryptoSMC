@@ -49,15 +49,29 @@ trader.log_message(f"Backend startup: trading_mode={trader.config.get('trading_m
 connected_websockets: List[WebSocket] = []
 
 async def broadcast_to_websockets(msg: Dict):
-    disconnected = []
-    for ws in connected_websockets:
+    to_remove = []
+    send_tasks = []
+
+    async def _send(ws: WebSocket):
         try:
-            await ws.send_json(msg)
-        except Exception:
-            disconnected.append(ws)
-            
-    for ws in disconnected:
+            await asyncio.wait_for(ws.send_json(msg), timeout=3)
+        except Exception as e:
+            logging.debug(f"WebSocket send failed: {e}")
+            to_remove.append(ws)
+
+    for ws in list(connected_websockets):
+        send_tasks.append(asyncio.create_task(_send(ws)))
+
+    if send_tasks:
+        # wait for all sends to complete, but don't fail the caller if one fails
+        await asyncio.gather(*send_tasks, return_exceptions=True)
+
+    for ws in to_remove:
         if ws in connected_websockets:
+            try:
+                await ws.close()
+            except Exception:
+                pass
             connected_websockets.remove(ws)
 
 # Wire live trader to broadcast messages through websockets
@@ -338,21 +352,42 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_websockets.append(websocket)
     try:
-        await websocket.send_json({
-            "type": "state",
-            "data": build_state_payload()
-        })
+        # Send initial full state
+        try:
+            await asyncio.wait_for(websocket.send_json({
+                "type": "state",
+                "data": build_state_payload()
+            }), timeout=3)
+        except Exception:
+            # If initial send fails, close connection gracefully
+            raise
 
+        # Keep connection alive. Use a receive timeout so we can periodically
+        # send lightweight pings if the client is silent and detect dead sockets.
         while True:
-            # Keep connection alive until the client closes the socket.
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            except asyncio.TimeoutError:
+                # send a lightweight ping/state timestamp to keep connection alive
+                try:
+                    await asyncio.wait_for(websocket.send_json({"type": "ping", "time": int(time.time() * 1000)}), timeout=3)
+                except Exception:
+                    break
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                logging.exception("WebSocket error during receive")
+                break
     except WebSocketDisconnect:
-        if websocket in connected_websockets:
-            connected_websockets.remove(websocket)
+        pass
     except Exception:
         logging.exception("WebSocket error")
+    finally:
         if websocket in connected_websockets:
-            connected_websockets.remove(websocket)
+            try:
+                connected_websockets.remove(websocket)
+            except Exception:
+                pass
 
 @app.on_event("startup")
 async def startup_event():

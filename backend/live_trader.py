@@ -1693,11 +1693,11 @@ class LiveTrader:
                     return
 
             closed_time = int(closed_candle['timestamp'])
-            current_trend = closed_candle['trend']
+            current_trend = closed_candle.get('trend', 'neutral')
             
-            # Find sweeps at closed_idx
-            sweeps = smc_res['liquidity_grabs']
-            sweep = next((sw for sw in sweeps if sw['idx'] == closed_idx), None)
+            # Find sweeps at closed_idx (guard missing keys)
+            sweeps = smc_res.get('liquidity_grabs', []) if isinstance(smc_res, dict) else []
+            sweep = next((sw for sw in sweeps if sw.get('idx') == closed_idx), None)
             
             if sweep:
                 sweep_type = sweep['type']
@@ -1708,8 +1708,8 @@ class LiveTrader:
                 if current_trend == 'uptrend' and sweep_type == 'bullish_sweep':
                     recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bullish')
                     if recent_structures:
-                        sweep_low = sweep['wick_low']
-                        demand_zones = [z for z in smc_res['demand_zones'] if z.get('active', True)]
+                        sweep_low = sweep.get('wick_low') if isinstance(sweep, dict) else None
+                        demand_zones = [z for z in smc_res.get('demand_zones', []) if z.get('active', True)]
                         matching_zone = None
 
                         for zone in demand_zones:
@@ -1754,8 +1754,8 @@ class LiveTrader:
                 elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep':
                     recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bearish')
                     if recent_structures:
-                        sweep_high = sweep['wick_high']
-                        supply_zones = [z for z in smc_res['supply_zones'] if z.get('active', True)]
+                        sweep_high = sweep.get('wick_high') if isinstance(sweep, dict) else None
+                        supply_zones = [z for z in smc_res.get('supply_zones', []) if z.get('active', True)]
                         matching_zone = None
 
                         for zone in supply_zones:
