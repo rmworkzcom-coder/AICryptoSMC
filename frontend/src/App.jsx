@@ -201,9 +201,12 @@ export default function App() {
     if (unrealized !== 0) {
       return sum + unrealized;
     }
-    const currentPrice = symbol === selectedSymbol
-      ? latestPrice
-      : (scannedSymbolsStatus[symbol]?.price || trade.entry_price || 0);
+    const markPrice = parseFloat(trade.mark_price) || 0;
+    const currentPrice = markPrice > 0
+      ? markPrice
+      : symbol === selectedSymbol
+        ? latestPrice || scannedSymbolsStatus[symbol]?.price || trade.entry_price || 0
+        : scannedSymbolsStatus[symbol]?.price || trade.entry_price || 0;
     const entryPrice = parseFloat(trade.entry_price) || 0;
     const size = parseFloat(trade.size) || 0;
     const pnl = trade.type === 'short'
@@ -275,17 +278,34 @@ export default function App() {
   const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const websocketUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
 
-  const fetchLiveChart = useCallback(async (symbolToFetch) => {
+  const safeFetchJson = useCallback(async (url, options = {}, fallback = null) => {
     try {
-      const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
-      const res = await fetch(`/chart?symbol=${sym}`);
-      const data = await res.json();
-      setLiveChartData(data.chart_data);
-      setLiveStructures(data.structures);
-    } catch (e) {
-      console.error("Failed to load live chart", e);
+      const res = await fetch(url, options);
+      if (!res.ok) {
+        console.warn(`Request failed (${res.status}): ${url}`);
+        return fallback;
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.warn(`Unexpected content type for ${url}: ${contentType}`);
+        return fallback;
+      }
+      return await res.json();
+    } catch (err) {
+      console.warn(`Network error while fetching ${url}`, err);
+      return fallback;
     }
-  }, [selectedSymbol]);
+  }, []);
+
+  const fetchLiveChart = useCallback(async (symbolToFetch) => {
+    const sym = symbolToFetch || selectedSymbol || 'BTCUSDT';
+    const data = await safeFetchJson(`/chart?symbol=${sym}`, {}, { chart_data: [], structures: {} });
+    if (!data) {
+      return;
+    }
+    setLiveChartData(data.chart_data || []);
+    setLiveStructures(data.structures || {});
+  }, [selectedSymbol, safeFetchJson]);
 
   const showNotification = useCallback((title, body) => {
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -424,111 +444,102 @@ export default function App() {
   }, []);
 
   const fetchConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/config');
-      const data = await res.json();
-      setConfig(prev => ({
-        ...prev,
-        ...data,
-        peak_drawdown_exit_pct: typeof data.peak_drawdown_exit_pct === 'number' ? data.peak_drawdown_exit_pct : prev.peak_drawdown_exit_pct,
-        max_trade_loss_usd: typeof data.max_trade_loss_usd === 'number' ? data.max_trade_loss_usd : prev.max_trade_loss_usd
-      }));
-      // Sync backtest parameters with current settings as start
-      setBacktestConfig(prev => ({
-        ...prev,
-        symbol: data.symbol,
-        timeframe: data.timeframe,
-        risk_pct: data.risk_pct,
-        rr_ratio: data.rr_ratio,
-        n_swing: data.n_swing,
-        x_impulse: data.x_impulse,
-        m_range: data.m_range,
-        breakeven_trigger: data.breakeven_trigger
-      }));
-    } catch (e) {
-      console.error("Failed to load config", e);
+    const data = await safeFetchJson('/config', {}, null);
+    if (!data) {
+      return;
     }
-  }, []);
+    setConfig(prev => ({
+      ...prev,
+      ...data,
+      peak_drawdown_exit_pct: typeof data.peak_drawdown_exit_pct === 'number' ? data.peak_drawdown_exit_pct : prev.peak_drawdown_exit_pct,
+      max_trade_loss_usd: typeof data.max_trade_loss_usd === 'number' ? data.max_trade_loss_usd : prev.max_trade_loss_usd
+    }));
+    // Sync backtest parameters with current settings as start
+    setBacktestConfig(prev => ({
+      ...prev,
+      symbol: data.symbol,
+      timeframe: data.timeframe,
+      risk_pct: data.risk_pct,
+      rr_ratio: data.rr_ratio,
+      n_swing: data.n_swing,
+      x_impulse: data.x_impulse,
+      m_range: data.m_range,
+      breakeven_trigger: data.breakeven_trigger
+    }));
+  }, [safeFetchJson]);
 
   const fetchTrades = useCallback(async () => {
-    try {
-      const res = await fetch('/trades');
-      const data = await res.json();
-      setActiveTrades(data.active_trades || {});
-      setTradeHistory(data.trade_history || []);
-      setBalance(data.paper_balance);
-      if (typeof data.initial_balance === 'number') {
-        setInitialBalance(data.initial_balance);
-      }
-    } catch (e) {
-      console.error("Failed to load trades", e);
+    const data = await safeFetchJson('/trades', {}, null);
+    if (!data) {
+      return;
     }
-  }, []);
+    setActiveTrades(data.active_trades || {});
+    setTradeHistory(data.trade_history || []);
+    setBalance(data.paper_balance);
+    if (typeof data.initial_balance === 'number') {
+      setInitialBalance(data.initial_balance);
+    }
+  }, [safeFetchJson]);
 
   const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/bot/status');
-      const data = await res.json();
-      setBotRunning(data.running);
-      setBotTimeframe(data.timeframe || botTimeframe);
-      setBalance(data.balance || data.paper_balance || balance);
-      setInitialBalance(typeof data.initial_balance === 'number' ? data.initial_balance : initialBalance);
-      setActiveTrades(data.active_trades || {});
-      setLatestPrice(data.latest_price || latestPrice);
-      setLatestTrend(data.latest_trend || latestTrend);
-      setScannedSymbolsStatus(data.scanned_symbols_status || {});
-      setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
-      setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
-      setScanSkipped(typeof data.scan_skipped === 'number' ? data.scan_skipped : 0);
-      setScanCycleCount(typeof data.scan_cycle_count === 'number' ? data.scan_cycle_count : 0);
-      if (typeof data.scan_interval_secs === 'number') {
-        setScanIntervalSeconds(data.scan_interval_secs);
-      }
-      if (typeof data.scan_last_broadcast_at === 'number') {
-        setScanLastBroadcastAt(data.scan_last_broadcast_at);
-      }
-      if (typeof data.trading_mode === 'string') {
-        setConfig(prev => ({ ...prev, trading_mode: data.trading_mode }));
-      }
-      if (typeof data.portfolio_margin === 'boolean') {
-        setConfig(prev => ({ ...prev, portfolio_margin: data.portfolio_margin }));
-      }
-      if (typeof data.selected_symbol === 'string') {
-        setSelectedSymbol(data.selected_symbol);
-      }
-      if (typeof data.symbol === 'string') {
-        setConfig(prev => ({ ...prev, symbol: data.symbol }));
-      }
-      if (typeof data.binance_auth_status === 'string') {
-        setBinanceAuthStatus(data.binance_auth_status);
-      }
-      if (typeof data.binance_auth_source === 'string') {
-        setBinanceAuthSource(data.binance_auth_source);
-      }
-      if (typeof data.binance_auth_mode === 'string') {
-        setBinanceAuthMode(data.binance_auth_mode);
-      }
-      if (typeof data.binance_auth_message === 'string') {
-        setBinanceAuthMessage(data.binance_auth_message);
-      }
-      if (data.trade_history) {
-        setTradeHistory(data.trade_history);
-      }
-      setStatusLoaded(true);
-    } catch (e) {
-      console.error("Failed to load bot status", e);
+    const data = await safeFetchJson('/bot/status', {}, null);
+    if (!data) {
+      return;
     }
-  }, [botTimeframe, balance, initialBalance, latestPrice, latestTrend]);
+    setBotRunning(data.running);
+    setBotTimeframe(data.timeframe || botTimeframe);
+    setBalance(data.balance || data.paper_balance || balance);
+    setInitialBalance(typeof data.initial_balance === 'number' ? data.initial_balance : initialBalance);
+    setActiveTrades(data.active_trades || {});
+    setLatestPrice(data.latest_price || latestPrice);
+    setLatestTrend(data.latest_trend || latestTrend);
+    setScannedSymbolsStatus(data.scanned_symbols_status || {});
+    setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
+    setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
+    setScanSkipped(typeof data.scan_skipped === 'number' ? data.scan_skipped : 0);
+    setScanCycleCount(typeof data.scan_cycle_count === 'number' ? data.scan_cycle_count : 0);
+    if (typeof data.scan_interval_secs === 'number') {
+      setScanIntervalSeconds(data.scan_interval_secs);
+    }
+    if (typeof data.scan_last_broadcast_at === 'number') {
+      setScanLastBroadcastAt(data.scan_last_broadcast_at);
+    }
+    if (typeof data.trading_mode === 'string') {
+      setConfig(prev => ({ ...prev, trading_mode: data.trading_mode }));
+    }
+    if (typeof data.portfolio_margin === 'boolean') {
+      setConfig(prev => ({ ...prev, portfolio_margin: data.portfolio_margin }));
+    }
+    if (typeof data.selected_symbol === 'string') {
+      setSelectedSymbol(data.selected_symbol);
+    }
+    if (typeof data.symbol === 'string') {
+      setConfig(prev => ({ ...prev, symbol: data.symbol }));
+    }
+    if (typeof data.binance_auth_status === 'string') {
+      setBinanceAuthStatus(data.binance_auth_status);
+    }
+    if (typeof data.binance_auth_source === 'string') {
+      setBinanceAuthSource(data.binance_auth_source);
+    }
+    if (typeof data.binance_auth_mode === 'string') {
+      setBinanceAuthMode(data.binance_auth_mode);
+    }
+    if (typeof data.binance_auth_message === 'string') {
+      setBinanceAuthMessage(data.binance_auth_message);
+    }
+    if (data.trade_history) {
+      setTradeHistory(data.trade_history);
+    }
+    setStatusLoaded(true);
+  }, [botTimeframe, balance, initialBalance, latestPrice, latestTrend, safeFetchJson]);
 
   const fetchLogs = useCallback(async () => {
-    try {
-      const res = await fetch('/logs');
-      const data = await res.json();
+    const data = await safeFetchJson('/logs', {}, []);
+    if (data) {
       setLogs(data);
-    } catch (e) {
-      console.error("Failed to load logs", e);
     }
-  }, []);
+  }, [safeFetchJson]);
 
   useEffect(() => {
     connectWebSocket();
@@ -927,13 +938,18 @@ export default function App() {
                 {Object.keys(activeTrades).length > 0 ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                     {Object.entries(activeTrades).map(([symbol, trade]) => {
-                      const currentPriceForSymbol = symbol === selectedSymbol 
-                        ? (latestPrice || trade.mark_price || trade.entry_price)
-                        : (scannedSymbolsStatus[symbol]?.price || trade.mark_price || trade.entry_price);
+                      const markPrice = parseFloat(trade.mark_price) || 0;
+                      const currentPriceForSymbol = markPrice > 0
+                        ? markPrice
+                        : symbol === selectedSymbol
+                          ? (latestPrice || scannedSymbolsStatus[symbol]?.price || trade.entry_price)
+                          : (scannedSymbolsStatus[symbol]?.price || trade.entry_price);
                       
+                      const entryPrice = parseFloat(trade.entry_price) || 0;
+                      const size = parseFloat(trade.size) || 0;
                       const pnl = trade.type === 'long' 
-                        ? (currentPriceForSymbol - trade.entry_price) * trade.size
-                        : (trade.entry_price - currentPriceForSymbol) * trade.size;
+                        ? (currentPriceForSymbol - entryPrice) * size
+                        : (entryPrice - currentPriceForSymbol) * size;
                       const pnlPct = (pnl / (trade.entry_price * trade.size)) * 100;
                       const positionValue = trade.entry_price * trade.size;
                       

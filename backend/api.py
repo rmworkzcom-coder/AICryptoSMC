@@ -134,6 +134,8 @@ class ConfigUpdate(BaseModel):
     m_range: Optional[int] = None
     breakeven_trigger: Optional[float] = None
     peak_drawdown_exit_pct: Optional[float] = None
+    peak_profit_retrace_pct: Optional[float] = None
+    peak_profit_retrace_min_usd: Optional[float] = None
     max_trade_loss_pct: Optional[float] = None
     max_trade_loss_usd: Optional[float] = None
     max_active_trades: Optional[int] = None

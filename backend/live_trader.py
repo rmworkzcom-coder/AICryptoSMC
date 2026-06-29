@@ -738,8 +738,15 @@ class LiveTrader:
         """
         trading_mode = self.config.get("trading_mode", "paper")
         if trading_mode != "live":
-            return self.active_trades
-            
+            return {
+                symbol: {
+                    **trade,
+                    'mark_price': float(trade.get('mark_price', trade.get('entry_price', 0.0)) or 0.0),
+                    'unrealized_pnl': float(trade.get('unrealized_pnl', 0.0) or 0.0)
+                }
+                for symbol, trade in self.active_trades.items()
+            }
+        
         portfolio_margin = self.config.get("portfolio_margin", False)
         exchange_positions = {}
         
@@ -1232,7 +1239,55 @@ class LiveTrader:
             elif trade_type == 'short':
                 trade['peak_price'] = min(peak_price, current_low)
             peak_price = trade['peak_price']
-            
+
+            # Peak profit retracement exit
+            peak_profit_retrace_pct = self.config.get("peak_profit_retrace_pct", 20.0)
+            peak_profit_retrace_min_usd = self.config.get("peak_profit_retrace_min_usd", 10.0)
+            if peak_profit_retrace_pct > 0.0 and peak_profit_retrace_min_usd > 0.0:
+                if trade_type == 'long':
+                    peak_pnl = (peak_price - entry_price) * size
+                    current_pnl = (current_low - entry_price) * size
+                else:
+                    peak_pnl = (entry_price - peak_price) * size
+                    current_pnl = (entry_price - current_high) * size
+
+                if peak_pnl >= peak_profit_retrace_min_usd:
+                    retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
+                    if current_pnl <= retrace_threshold:
+                        self.log_message(
+                            f"[{symbol}] Peak profit retracement exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "
+                            f"Peak PnL: {peak_pnl:.2f}, Current PnL: {current_pnl:.2f}, "
+                            f"threshold: {retrace_threshold:.2f}."
+                        )
+                        pnl = current_pnl
+                        self.paper_balance += pnl
+                        exit_price = current_low if trade_type == 'long' else current_high
+                        self.close_trade(symbol, exit_price, pnl, "PEAK_PROFIT_RETRACE")
+                        return
+
+            # Immediate risk amount exit
+            risk_amount = float(trade.get('risk_amount', 0.0) or 0.0)
+            if risk_amount > 0.0:
+                if trade_type == 'long':
+                    raw_loss = (entry_price - current_low) * size
+                    drag_estimate = (entry_price + current_low) * size * 0.0006
+                    exit_price = current_low
+                else:
+                    raw_loss = (current_high - entry_price) * size
+                    drag_estimate = (entry_price + current_high) * size * 0.0006
+                    exit_price = current_high
+
+                estimated_actual_loss = raw_loss + drag_estimate
+                if estimated_actual_loss >= risk_amount:
+                    self.log_message(
+                        f"[{symbol}] Risk amount exit triggered at {exit_price:.8f}. "
+                        f"Estimated actual loss: {estimated_actual_loss:.2f}, target risk: {risk_amount:.2f}."
+                    )
+                    pnl = (exit_price - entry_price) * size if trade_type == 'long' else (entry_price - exit_price) * size
+                    self.paper_balance += pnl
+                    self.close_trade(symbol, exit_price, pnl, "RISK_CAP")
+                    return
+
             # Trailing Stop Loss Adjustment
             trailing_activation = self.config.get("trailing_stop_activation_pct", 0.0)
             trailing_distance = self.config.get("trailing_stop_distance_pct", 0.0)
