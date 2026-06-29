@@ -230,6 +230,7 @@ export default function App() {
   const [websocketUrl, setWebsocketUrl] = useState('');
   
   const [statusLoaded, setStatusLoaded] = useState(false);
+  const [websocketErrorMessage, setWebsocketErrorMessage] = useState(null);
   
   // Configuration State
   const [config, setConfig] = useState({
@@ -277,6 +278,9 @@ export default function App() {
   const shouldReconnectRef = useRef(true);
   const logsEndRef = useRef(null);
   const consoleContainerRef = useRef(null);
+  const fetchStatusRef = useRef(null);
+  const fetchTradesRef = useRef(null);
+  const heartbeatTimerRef = useRef(null);
 
   // Connect WebSockets through the frontend host so Vite can proxy local backend traffic.
   const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -333,6 +337,13 @@ export default function App() {
     }
   }, []);
 
+  const clearHeartbeatTimer = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      window.clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }, []);
+
   const connectWebSocket = useCallback(function connect(useDirect = false) {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       wsRef.current.close();
@@ -349,20 +360,40 @@ export default function App() {
 
     ws.onopen = () => {
       clearReconnectTimer();
+      clearHeartbeatTimer();
       setWebsocketStatus('open');
+      setWebsocketErrorMessage(null);
       console.debug('[WebSocket] connection opened', targetUrl);
+      fetchStatusRef.current?.();
+      fetchTradesRef.current?.();
+
+      heartbeatTimerRef.current = window.setInterval(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          try {
+            wsRef.current.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
+          } catch (err) {
+            console.debug('[WebSocket] heartbeat failed', err);
+          }
+        }
+      }, 25000);
     };
 
     ws.onerror = (event) => {
       console.debug('[WebSocket] error', event, 'url=', targetUrl);
       setWebsocketStatus('error');
+      setWebsocketErrorMessage(event?.message ? String(event.message) : 'WebSocket connection error');
+      fetchStatusRef.current?.();
+      clearHeartbeatTimer();
+      if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+        wsRef.current.close();
+      }
       if (!shouldReconnectRef.current) {
         return;
       }
       if (!useDirect && websocketDirectUrl) {
         reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
       } else {
-        reconnectTimerRef.current = window.setTimeout(connect, 3000);
+        reconnectTimerRef.current = window.setTimeout(() => connect(false), 5000);
       }
     };
 
@@ -455,13 +486,18 @@ export default function App() {
 
     ws.onclose = (event) => {
       clearReconnectTimer();
+      clearHeartbeatTimer();
+      wsRef.current = null;
+      const closedReason = event?.reason ? ` (${event.reason})` : '';
       setWebsocketStatus('closed');
+      setWebsocketErrorMessage(event?.wasClean === false ? `Socket closed unexpectedly${closedReason}` : null);
+      fetchStatusRef.current?.();
       if (shouldReconnectRef.current) {
         console.debug('[WebSocket] closed', event, 'url=', targetUrl);
-        reconnectTimerRef.current = window.setTimeout(connect, 3000);
+        reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
       }
     };
-  }, [clearReconnectTimer, showNotification, websocketProxyUrl, websocketDirectUrl]);
+  }, [clearHeartbeatTimer, clearReconnectTimer, showNotification, websocketProxyUrl, websocketDirectUrl]);
 
   const scrollToBottom = useCallback(() => {
     if (consoleContainerRef.current) {
@@ -518,6 +554,10 @@ export default function App() {
     }
   }, [safeFetchJson]);
 
+  useEffect(() => {
+    fetchTradesRef.current = fetchTrades;
+  }, [fetchTrades]);
+
   const fetchStatus = useCallback(async () => {
     const data = await safeFetchJson('/bot/status', {}, null);
     if (!data) {
@@ -573,6 +613,10 @@ export default function App() {
     setStatusLoaded(true);
   }, [safeFetchJson]);
 
+  useEffect(() => {
+    fetchStatusRef.current = fetchStatus;
+  }, [fetchStatus]);
+
   const fetchLogs = useCallback(async () => {
     const data = await safeFetchJson('/logs', {}, []);
     if (data) {
@@ -599,7 +643,7 @@ export default function App() {
       }
       window.clearInterval(statusPoll);
     };
-  }, [connectWebSocket, fetchStatus, fetchConfig, fetchTrades, fetchLogs]);
+  }, [connectWebSocket, fetchConfig, fetchLogs, fetchStatus, fetchTrades]);
 
   useEffect(() => {
     fetchLiveChart(selectedSymbol);
@@ -818,6 +862,32 @@ export default function App() {
                 : 'Disconnected'}
             </span>
             <span style={styles.scanStatusSecondary}>{websocketUrl}</span>
+            {(websocketErrorMessage && websocketStatus !== 'open') && (
+              <div style={{ ...styles.scanStatusSecondary, color: 'var(--bearish)', marginTop: '4px' }}>
+                {websocketErrorMessage}
+              </div>
+            )}
+            {websocketStatus !== 'open' && (
+              <button
+                type="button"
+                onClick={() => {
+                  shouldReconnectRef.current = true;
+                  connectWebSocket();
+                }}
+                style={{
+                  marginTop: '8px',
+                  padding: '6px 10px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(148, 163, 184, 0.24)',
+                  background: 'rgba(255,255,255,0.04)',
+                  color: 'var(--text-main)',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem'
+                }}
+              >
+                Reconnect
+              </button>
+            )}
           </div>
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Binance Auth</span>
@@ -2316,6 +2386,7 @@ const styles = {
     fontSize: '0.75rem',
     color: 'var(--text-muted)',
     lineHeight: '1.2',
+    maxWidth: '100%',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
