@@ -1705,74 +1705,96 @@ class LiveTrader:
                 risk_pct = self.config.get("risk_pct", 1.0)
 
                 # LONG setup check
-                if current_trend == 'uptrend' and sweep_type == 'bullish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bullish'):
-                    sweep_low = sweep['wick_low']
-                    demand_zones = [z for z in smc_res['demand_zones'] if z.get('active', True)]
-                    matching_zone = None
+                if current_trend == 'uptrend' and sweep_type == 'bullish_sweep':
+                    recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bullish')
+                    if recent_structures:
+                        sweep_low = sweep['wick_low']
+                        demand_zones = [z for z in smc_res['demand_zones'] if z.get('active', True)]
+                        matching_zone = None
 
-                    for zone in demand_zones:
-                        if zone['start_idx'] < closed_idx:
-                            if sweep_low <= zone['high'] and float(closed_candle['close']) >= zone['low']:
-                                matching_zone = zone
-                                break
+                        for zone in demand_zones:
+                            if zone['start_idx'] < closed_idx:
+                                if sweep_low <= zone['high'] and float(closed_candle['close']) >= zone['low']:
+                                    matching_zone = zone
+                                    break
 
-                    if matching_zone:
-                        entry_price = float(closed_candle['close'])
-                        min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
-                        raw_stop = sweep_low - (entry_price * 0.001)
-                        stop_loss = min(raw_stop, entry_price - min_stop_dist)
-                        risk_per_share = entry_price - stop_loss
+                        if matching_zone:
+                            entry_price = float(closed_candle['close'])
+                            min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
+                            raw_stop = sweep_low - (entry_price * 0.001)
+                            stop_loss = min(raw_stop, entry_price - min_stop_dist)
+                            risk_per_share = entry_price - stop_loss
 
-                        if risk_per_share > 0:
-                            current_balance = self.get_live_balance()
-                            risk_usd = current_balance * (risk_pct / 100.0)
-                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
-                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
-                                self.log_message(
-                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
-                                )
-                                risk_usd = max_trade_loss_usd
-                            size = risk_usd / risk_per_share
-                            take_profit = entry_price + (rr_ratio * risk_per_share)
-                            self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
-                            signal_detected = True
+                            if risk_per_share > 0:
+                                current_balance = self.get_live_balance()
+                                risk_usd = current_balance * (risk_pct / 100.0)
+                                max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                                if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                    self.log_message(
+                                        f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                    )
+                                    risk_usd = max_trade_loss_usd
+                                size = risk_usd / risk_per_share
+                                take_profit = entry_price + (rr_ratio * risk_per_share)
+                                self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
+                                signal_detected = True
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Bullish sweep found at idx {closed_idx} but no matching demand zone."
+                                f" active_demand_zones={len(demand_zones)} close={closed_candle['close']} sweep_low={sweep_low}",
+                                "info"
+                            )
                     else:
-                        self.log_message(f"[{symbol}] Bullish sweep found but no matching demand zone at idx {closed_idx}.", "info")
+                        self.log_message(
+                            f"[{symbol}] Bullish sweep found at idx {closed_idx} but no recent bullish structure within lookback={self.config.get('structure_lookback', 3)}.",
+                            "info"
+                        )
 
                 # SHORT setup check
-                elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bearish'):
-                    sweep_high = sweep['wick_high']
-                    supply_zones = [z for z in smc_res['supply_zones'] if z.get('active', True)]
-                    matching_zone = None
+                elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep':
+                    recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bearish')
+                    if recent_structures:
+                        sweep_high = sweep['wick_high']
+                        supply_zones = [z for z in smc_res['supply_zones'] if z.get('active', True)]
+                        matching_zone = None
 
-                    for zone in supply_zones:
-                        if zone['start_idx'] < closed_idx:
-                            if sweep_high >= zone['low'] and float(closed_candle['close']) <= zone['high']:
-                                matching_zone = zone
-                                break
+                        for zone in supply_zones:
+                            if zone['start_idx'] < closed_idx:
+                                if sweep_high >= zone['low'] and float(closed_candle['close']) <= zone['high']:
+                                    matching_zone = zone
+                                    break
 
-                    if matching_zone:
-                        entry_price = float(closed_candle['close'])
-                        min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
-                        raw_stop = sweep_high + (entry_price * 0.001)
-                        stop_loss = max(raw_stop, entry_price + min_stop_dist)
-                        risk_per_share = stop_loss - entry_price
+                        if matching_zone:
+                            entry_price = float(closed_candle['close'])
+                            min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
+                            raw_stop = sweep_high + (entry_price * 0.001)
+                            stop_loss = max(raw_stop, entry_price + min_stop_dist)
+                            risk_per_share = stop_loss - entry_price
 
-                        if risk_per_share > 0:
-                            current_balance = self.get_live_balance()
-                            risk_usd = current_balance * (risk_pct / 100.0)
-                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
-                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
-                                self.log_message(
-                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
-                                )
-                                risk_usd = max_trade_loss_usd
-                            size = risk_usd / risk_per_share
-                            take_profit = entry_price - (rr_ratio * risk_per_share)
-                            self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
-                            signal_detected = True
+                            if risk_per_share > 0:
+                                current_balance = self.get_live_balance()
+                                risk_usd = current_balance * (risk_pct / 100.0)
+                                max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                                if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                    self.log_message(
+                                        f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                    )
+                                    risk_usd = max_trade_loss_usd
+                                size = risk_usd / risk_per_share
+                                take_profit = entry_price - (rr_ratio * risk_per_share)
+                                self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
+                                signal_detected = True
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Bearish sweep found at idx {closed_idx} but no matching supply zone."
+                                f" active_supply_zones={len(supply_zones)} close={closed_candle['close']} sweep_high={sweep_high}",
+                                "info"
+                            )
                     else:
-                        self.log_message(f"[{symbol}] Bearish sweep found but no matching supply zone at idx {closed_idx}.", "info")
+                        self.log_message(
+                            f"[{symbol}] Bearish sweep found at idx {closed_idx} but no recent bearish structure within lookback={self.config.get('structure_lookback', 3)}.",
+                            "info"
+                        )
 
             return signal_detected
 
