@@ -282,11 +282,13 @@ export default function App() {
   const fetchTradesRef = useRef(null);
   const heartbeatTimerRef = useRef(null);
 
-  // Connect WebSockets through the frontend host so Vite can proxy local backend traffic.
+  // Use a direct backend websocket URL in local development when possible.
+  // Otherwise proxy websocket traffic through the frontend host.
   const websocketProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const websocketProxyUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
   const isLocalDevHost = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
   const websocketDirectUrl = isLocalDevHost ? `${websocketProtocol}://127.0.0.1:8005/api/ws` : null;
+  const websocketProxyUrl = `${websocketProtocol}://${window.location.host}/api/ws`;
+  const lastTriedDirectRef = useRef(false);
 
   const safeFetchJson = useCallback(async (url, options = {}, fallback = null) => {
     try {
@@ -344,13 +346,15 @@ export default function App() {
     }
   }, []);
 
-  const connectWebSocket = useCallback(function connect(useDirect = false) {
+  const connectWebSocket = useCallback(function connect(useDirect) {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       wsRef.current.close();
     }
     clearReconnectTimer();
 
-    const targetUrl = useDirect && websocketDirectUrl ? websocketDirectUrl : websocketProxyUrl;
+    const useDirectConnection = typeof useDirect === 'boolean' ? useDirect : Boolean(websocketDirectUrl);
+    const targetUrl = useDirectConnection && websocketDirectUrl ? websocketDirectUrl : websocketProxyUrl;
+    lastTriedDirectRef.current = targetUrl === websocketDirectUrl;
     setWebsocketUrl(targetUrl);
     setWebsocketStatus('connecting');
 
@@ -381,7 +385,7 @@ export default function App() {
     ws.onerror = (event) => {
       console.debug('[WebSocket] error', event, 'url=', targetUrl);
       setWebsocketStatus('error');
-      setWebsocketErrorMessage(event?.message ? String(event.message) : 'WebSocket connection error');
+      setWebsocketErrorMessage(event?.message ? String(event.message) : `WebSocket connection error (${targetUrl})`);
       fetchStatusRef.current?.();
       clearHeartbeatTimer();
       if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -390,7 +394,9 @@ export default function App() {
       if (!shouldReconnectRef.current) {
         return;
       }
-      if (!useDirect && websocketDirectUrl) {
+      if (targetUrl === websocketDirectUrl && websocketProxyUrl !== websocketDirectUrl) {
+        reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
+      } else if (targetUrl !== websocketDirectUrl && websocketDirectUrl) {
         reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
       } else {
         reconnectTimerRef.current = window.setTimeout(() => connect(false), 5000);
@@ -494,7 +500,13 @@ export default function App() {
       fetchStatusRef.current?.();
       if (shouldReconnectRef.current) {
         console.debug('[WebSocket] closed', event, 'url=', targetUrl);
-        reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
+        if (targetUrl === websocketDirectUrl && websocketProxyUrl !== websocketDirectUrl) {
+          reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
+        } else if (targetUrl !== websocketDirectUrl && websocketDirectUrl) {
+          reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
+        } else {
+          reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
+        }
       }
     };
   }, [clearHeartbeatTimer, clearReconnectTimer, showNotification, websocketProxyUrl, websocketDirectUrl]);
