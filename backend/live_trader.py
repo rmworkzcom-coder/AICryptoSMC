@@ -48,6 +48,7 @@ class LiveTrader:
         self.trade_history = []
         self.paper_balance = DEFAULT_INITIAL_BALANCE
         self.last_candle_times = {}  # symbol -> last_candle_time
+        self.frozen_symbols = {}  # symbol -> freeze expiry timestamp
         
         # Dataframes cache
         self.df = None  # selected or fallback dataframe (for backwards compatibility)
@@ -117,6 +118,7 @@ class LiveTrader:
 
     def load_trades(self):
         self.active_trades = {}
+        self.frozen_symbols = {}
         if os.path.exists(self.trades_file):
             try:
                 with open(self.trades_file, 'r') as f:
@@ -128,8 +130,14 @@ class LiveTrader:
                         self.active_trades[symbol] = data["active_trade"]
                     self.trade_history = data.get("trade_history", [])
                     self.paper_balance = data.get("paper_balance", DEFAULT_INITIAL_BALANCE)
+                    self.frozen_symbols = {
+                        symbol: float(expiry)
+                        for symbol, expiry in data.get("frozen_symbols", {}).items()
+                        if isinstance(expiry, (int, float))
+                    }
             except Exception as e:
                 logger.error(f"Error loading trades.json: {e}")
+        self._purge_expired_frozen_symbols()
 
     def save_trades(self):
         try:
@@ -137,7 +145,8 @@ class LiveTrader:
                 json.dump({
                     "active_trades": self.active_trades,
                     "trade_history": self.trade_history,
-                    "paper_balance": self.paper_balance
+                    "paper_balance": self.paper_balance,
+                    "frozen_symbols": self.frozen_symbols
                 }, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving trades.json: {e}")
@@ -146,6 +155,7 @@ class LiveTrader:
         self.active_trades = {}
         self.trade_history = []
         self.paper_balance = DEFAULT_INITIAL_BALANCE
+        self.frozen_symbols = {}
         self.save_trades()
         self.log_message("Trading state and history reset to default.")
         
@@ -157,6 +167,23 @@ class LiveTrader:
                     loop.create_task(self.broadcast_current_state())
             except RuntimeError:
                 pass
+
+    def _purge_expired_frozen_symbols(self):
+        now = time.time()
+        expired = [symbol for symbol, expiry in self.frozen_symbols.items() if expiry <= now]
+        for symbol in expired:
+            del self.frozen_symbols[symbol]
+
+    def _is_symbol_frozen(self, symbol: str) -> bool:
+        self._purge_expired_frozen_symbols()
+        expiry = self.frozen_symbols.get(symbol)
+        if expiry is None:
+            return False
+        if expiry > time.time():
+            self.log_message(f"[{symbol}] Symbol is frozen until {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expiry))}. Skipping reentry.")
+            return True
+        del self.frozen_symbols[symbol]
+        return False
 
     def get_latest_price(self, symbol: str) -> float:
         market_type = self.config.get("market_type", "futures")
@@ -1277,7 +1304,7 @@ class LiveTrader:
                     peak_pnl = (entry_price - peak_price) * size
                     current_pnl = (entry_price - current_high) * size
 
-                if peak_pnl >= effective_peak_profit_retrace_min_usd:
+                if peak_pnl > 0.0 and peak_pnl >= effective_peak_profit_retrace_min_usd:
                     retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
                     # Avoid retrace thresholds smaller than half the original risk amount.
                     if risk_amount > 0.0:
@@ -1463,22 +1490,36 @@ class LiveTrader:
                         self.close_trade(symbol, worst_price, pnl, "HARD_STOP")
                         return
             if max_trade_loss_usd > 0.0:
+                fee_rate = 0.0004
+                slippage_rate = 0.0002
+                total_drag_rate = fee_rate + slippage_rate
+
                 if trade_type == 'long':
                     worst_price = min(current_price, current_low)
                     loss_usd = (entry_price - worst_price) * size
-                    if loss_usd >= max_trade_loss_usd:
+                    estimated_drag = (entry_price + worst_price) * size * total_drag_rate
+                    estimated_net_loss = loss_usd + estimated_drag
+                    if estimated_net_loss >= max_trade_loss_usd:
                         pnl = (worst_price - entry_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} loss. Exiting LONG trade.")
+                        self.log_message(
+                            f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} raw loss "
+                            f"and estimated ${estimated_drag:.2f} drag (net ${estimated_net_loss:.2f}). Exiting LONG trade."
+                        )
                         self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
                         return
                 elif trade_type == 'short':
                     worst_price = max(current_price, current_high)
                     loss_usd = (worst_price - entry_price) * size
-                    if loss_usd >= max_trade_loss_usd:
+                    estimated_drag = (entry_price + worst_price) * size * total_drag_rate
+                    estimated_net_loss = loss_usd + estimated_drag
+                    if estimated_net_loss >= max_trade_loss_usd:
                         pnl = (entry_price - worst_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} loss. Exiting SHORT trade.")
+                        self.log_message(
+                            f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} raw loss "
+                            f"and estimated ${estimated_drag:.2f} drag (net ${estimated_net_loss:.2f}). Exiting SHORT trade."
+                        )
                         self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
                         return
 
@@ -1515,6 +1556,9 @@ class LiveTrader:
                     
         # 2. Check for entry triggers on new candle close
         elif is_new_candle and len(df) > 2:
+            if self._is_symbol_frozen(symbol):
+                self.scan_progress += 1
+                return False
             if self.check_daily_drawdown():
                 self.log_message(f"[{symbol}] Daily drawdown limit reached. Skipping trade entry.", "warning")
                 return
@@ -1875,6 +1919,13 @@ class LiveTrader:
 
         self.trade_history.append(closed_trade)
         del self.active_trades[symbol]
+        if pnl < 0.0:
+            freeze_duration = float(self.config.get("loss_freeze_duration_secs", 3600))
+            self.frozen_symbols[symbol] = time.time() + freeze_duration
+            self.log_message(
+                f"[{symbol}] Losing trade closed. Freezing new entries for {int(freeze_duration)} seconds."
+            )
+        self._purge_expired_frozen_symbols()
         self.save_trades()
         self.log_message(
             f"[{symbol}] CLOSED Trade. PnL: {pnl:.2f} USD. Regret: {regret_pnl:.2f} USD. Account Balance: {self.paper_balance:.2f} USD"
