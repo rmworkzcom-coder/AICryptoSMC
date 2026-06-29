@@ -185,6 +185,8 @@ export default function App() {
   const [scanCount, setScanCount] = useState(0);
   const [scanTotal, setScanTotal] = useState(0);
   const [scanSkipped, setScanSkipped] = useState(0);
+  const [signalsFound, setSignalsFound] = useState(0);
+  const [openTradesCreated, setOpenTradesCreated] = useState(0);
   const [scanCycleCount, setScanCycleCount] = useState(0);
   const [nextScanCountdown, setNextScanCountdown] = useState(15);
   const [scanIntervalSeconds, setScanIntervalSeconds] = useState(15);
@@ -332,6 +334,7 @@ export default function App() {
       // Suppress Vite proxy noise and only log unexpected runtime errors.
       if (shouldReconnectRef.current) {
         console.debug('[WebSocket] error', event);
+        fetchStatus();
       }
     };
 
@@ -548,12 +551,17 @@ export default function App() {
     fetchTrades();
     fetchLogs();
 
+    const statusPoll = window.setInterval(() => {
+      fetchStatus();
+    }, 10000);
+
     return () => {
       shouldReconnectRef.current = false;
       if (wsRef.current) wsRef.current.close();
       if (reconnectTimerRef.current) {
         window.clearTimeout(reconnectTimerRef.current);
       }
+      window.clearInterval(statusPoll);
     };
   }, [connectWebSocket, fetchStatus, fetchConfig, fetchTrades, fetchLogs]);
 

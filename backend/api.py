@@ -88,8 +88,8 @@ def build_state_payload() -> Dict:
                 "is_swing_low": bool(latest_candle.get('is_swing_low', False))
             }
     
-    total_symbols = len(trader.config.get("symbols", []))
-    scanned_count = len(scanned_symbols_status)
+    total_symbols = trader.scan_total or len(trader.config.get("symbols", []))
+    scanned_count = trader.scan_progress if trader.scan_progress > 0 else len(scanned_symbols_status)
     skipped_count = max(0, total_symbols - scanned_count)
 
     return {

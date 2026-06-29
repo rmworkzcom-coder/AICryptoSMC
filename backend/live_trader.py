@@ -54,6 +54,11 @@ class LiveTrader:
         self.dfs = {}   # symbol -> dataframe
         self.websocket_broadcast_callback = None
         self.scan_cycle_count = 0
+        self.scan_total = 0
+        self.scan_progress = 0
+        self.signals_found = 0
+        self.open_trades_created = 0
+        self.skipped_symbols = 0
         
         self.trades_file = os.path.join(os.path.dirname(config_path), "trades.json")
         self.load_trades()
@@ -317,9 +322,12 @@ class LiveTrader:
                     "latest_price": latest_close,
                     "latest_trend": latest_trend,
                     "scanned_symbols_status": scanned_symbols_status,
-                    "scan_total": total_symbols,
-                    "scan_count": scanned_count,
+                    "scan_total": self.scan_total or total_symbols,
+                    "scan_count": self.scan_progress,
                     "scan_skipped": skipped_count,
+                    "signals_found": self.signals_found,
+                    "open_trades_created": self.open_trades_created,
+                    "skipped_symbols": self.skipped_symbols,
                     "trading_mode": self.config.get("trading_mode", "paper"),
                     "portfolio_margin": self.config.get("portfolio_margin", False),
                     "binance_auth_status": self.binance_auth_status,
@@ -1120,6 +1128,11 @@ class LiveTrader:
                 self.config = self.load_config()
                 symbols = self.config.get("symbols", [self.config.get("symbol", "BTCUSDT")])
                 timeframe = self.config.get("timeframe", "15m")
+                self.scan_total = len(symbols)
+                self.scan_progress = 0
+                self.signals_found = 0
+                self.open_trades_created = 0
+                self.skipped_symbols = 0
                 
                 # 1. Fetch data concurrently
                 dfs = await self.fetch_all_klines(symbols)
@@ -1142,6 +1155,10 @@ class LiveTrader:
                     if df is None or len(df) < min_candles:
                         logger.warning(f"Skipping {symbol}: insufficient data (have {len(df) if df is not None else 0} candles, need {min_candles})")
                         dfs.pop(symbol, None)
+                        self.scan_progress += 1
+                        self.skipped_symbols += 1
+                        if self.scan_progress % 10 == 0 or self.scan_progress == self.scan_total:
+                            await self.broadcast_current_state()
                         continue
                     
                     # Check if we have new candle close
@@ -1162,7 +1179,8 @@ class LiveTrader:
                     dfs[symbol] = smc_res['df']
                     
                     # Process signals
-                    self.process_tick(symbol, smc_res, is_new_candle)
+                                if self.process_tick(symbol, smc_res, is_new_candle):
+                        self.signals_found += 1
                     
                     if is_new_candle:
                         self.last_candle_times[symbol] = latest_candle_time
@@ -1176,6 +1194,9 @@ class LiveTrader:
                         "is_swing_high": bool(latest_candle.get('is_swing_high', False)),
                         "is_swing_low": bool(latest_candle.get('is_swing_low', False))
                     }
+                    self.scan_progress += 1
+                    if self.scan_progress % 10 == 0 or self.scan_progress == self.scan_total:
+                        await self.broadcast_current_state()
                 
                 # Update self.df to the processed selected/fallback dataframe
                 if selected_symbol in dfs:
@@ -1207,6 +1228,7 @@ class LiveTrader:
         current_high = float(current_candle['high'])
         current_low = float(current_candle['low'])
         current_time = int(current_candle['timestamp'])
+        signal_detected = False
         
         # 1. Manage Active Trade for this symbol
         if symbol in self.active_trades:
@@ -1535,6 +1557,7 @@ class LiveTrader:
                         risk_per_share = entry_price - stop_loss
                         
                         if risk_per_share > 0:
+                            signal_detected = True
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
@@ -1569,6 +1592,7 @@ class LiveTrader:
                         risk_per_share = stop_loss - entry_price
                         
                         if risk_per_share > 0:
+                            signal_detected = True
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
@@ -1581,6 +1605,8 @@ class LiveTrader:
                             take_profit = entry_price - (rr_ratio * risk_per_share)
                             
                             self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
+
+        return signal_detected
 
     def get_symbol_precision(self, symbol: str, market_type: str = "futures") -> Tuple[int, int]:
         try:
@@ -1635,6 +1661,7 @@ class LiveTrader:
             'entry_candle_idx': entry_candle_idx
         }
         self.active_trades[symbol] = trade_details
+        self.open_trades_created += 1
         
         self.log_message(f"[{symbol}] OPENED {trade_type.upper()} Trade. Entry: {entry_price}, SL: {sl:.4f}, TP: {tp:.4f}, Size: {size:.6f}")
         self.save_trades()
@@ -1645,6 +1672,7 @@ class LiveTrader:
             except Exception:
                 pass
         
+        self.open_trades_created += 1
         if trading_mode == "live" and self.client:
             try:
                 # Fetch precision
