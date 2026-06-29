@@ -10,6 +10,8 @@ import hashlib
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from backend.smc_engine import calculate_smc
@@ -61,8 +63,10 @@ class LiveTrader:
         self.open_trades_created = 0
         self.skipped_symbols = 0
         self.scan_last_broadcast_at = int(time.time() * 1000)
+        self.last_binance_api_error_time = 0.0
         
         self.trades_file = os.path.join(os.path.dirname(config_path), "trades.json")
+        self.requests_session = self._create_requests_session()
         self.load_trades()
 
     @property
@@ -99,6 +103,21 @@ class LiveTrader:
         except Exception as e:
             logger.error(f"Error loading config: {e}. Using existing config if available.")
             return getattr(self, 'config', {}) or {}
+
+    def _create_requests_session(self) -> requests.Session:
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            connect=3,
+            read=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=frozenset(['GET', 'POST'])
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def save_config(self):
         temp_path = self.config_path + ".tmp"
@@ -187,21 +206,59 @@ class LiveTrader:
 
     def get_latest_price(self, symbol: str) -> float:
         market_type = self.config.get("market_type", "futures")
-        try:
-            if market_type == "futures":
-                url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
-            else:
-                url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-            
-            res = requests.get(url, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                price = float(data.get('price', 0.0))
-                if price > 0:
-                    return price
-        except Exception as e:
-            logger.error(f"Error fetching latest price for {symbol}: {e}")
-            
+        urls = []
+        if market_type == "futures":
+            urls = [
+                f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}",
+                f"https://fapi1.binance.com/fapi/v1/ticker/price?symbol={symbol}",
+                f"https://fapi2.binance.com/fapi/v1/ticker/price?symbol={symbol}",
+            ]
+        else:
+            urls = [
+                f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",
+                f"https://api1.binance.com/api/v3/ticker/price?symbol={symbol}",
+                f"https://api2.binance.com/api/v3/ticker/price?symbol={symbol}",
+            ]
+
+        with self._create_requests_session() as session:
+            for url in urls:
+                try:
+                    res = session.get(url, timeout=5)
+                    if res.status_code == 200:
+                        data = res.json()
+                        price = float(data.get('price', 0.0))
+                        if price > 0:
+                            return price
+                    else:
+                        logger.warning(f"Failed to fetch latest price for {symbol} from {url}: {res.status_code}")
+                except Exception as e:
+                    logger.warning(f"Error fetching latest price for {symbol} from {url}: {e}")
+
+        if market_type == "futures":
+            fallback_urls = [
+                f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",
+                f"https://api1.binance.com/api/v3/ticker/price?symbol={symbol}",
+                f"https://api2.binance.com/api/v3/ticker/price?symbol={symbol}",
+            ]
+            self.log_message(f"[{symbol}] Falling back to spot ticker endpoints for live price.", "warning")
+            with self._create_requests_session() as session:
+                for url in fallback_urls:
+                    try:
+                        res = session.get(url, timeout=5)
+                        if res.status_code == 200:
+                            data = res.json()
+                            price = float(data.get('price', 0.0))
+                            if price > 0:
+                                return price
+                        else:
+                            logger.warning(f"Failed to fetch fallback latest price for {symbol} from {url}: {res.status_code}")
+                    except Exception as e:
+                        logger.warning(f"Error fetching fallback latest price for {symbol} from {url}: {e}")
+
+        df = self.dfs.get(symbol)
+        if df is not None and len(df) > 0:
+            return float(df.iloc[-1]['close'])
+
         # Fallback to last candle close if request fails
         df = self.dfs.get(symbol)
         if df is not None and len(df) > 0:
@@ -391,8 +448,13 @@ class LiveTrader:
         logger.info("Configuration updated.")
 
     def log_message(self, message: str, level: str = "info"):
+        level = level.lower()
         if level == "error":
             logger.error(message)
+        elif level == "warning":
+            logger.warning(message)
+        elif level == "debug":
+            logger.debug(message)
         else:
             logger.info(message)
         
@@ -539,25 +601,29 @@ class LiveTrader:
                 if not verified and market_type == "futures" and not portfolio_margin:
                     self._try_portfolio_margin_fallback(source)
             except Exception as e:
-                self.log_message(f"Failed to init Binance client with keys: {e}. Falling back to public endpoints.", "warning")
+                self.log_message(
+                    f"Failed to init Binance client with keys: {e}. Live trading remains enabled, but account access is unavailable right now.",
+                    "warning"
+                )
                 self.client = None
                 if trading_mode == "live":
                     self.log_message(
-                        "Live trading is enabled but Binance client failed to initialize. "
-                        "Please verify API credentials and permissions.",
+                        "Live trading is enabled but Binance account access is currently unavailable. "
+                        "Market data will continue using public Binance endpoints until auth is restored.",
                         "warning"
                     )
                 else:
-                    self.log_message("Live mode is not enabled; operating in paper/public mode.", "info")
+                    self.log_message("Live mode is not enabled; operating in public endpoint mode.", "info")
         else:
             if trading_mode == "live":
                 self.log_message(
                     "Live trading is enabled but Binance API keys are missing. "
-                    "Please configure keys to enable real orders.",
+                    "Live orders are unavailable until keys are configured. "
+                    "Market data will continue via public Binance endpoints.",
                     "warning"
                 )
             else:
-                self.log_message("No API keys found. Operating in public endpoint monitoring mode (Paper trading only).")
+                self.log_message("No API keys found. Operating in public endpoint mode.", "info")
             self.client = None
 
     def _is_papi_unauthorized(self, exception: Exception) -> bool:
@@ -666,6 +732,12 @@ class LiveTrader:
                 return True
         return False
 
+    def _log_binance_api_warning(self, message: str):
+        now = time.time()
+        if now - self.last_binance_api_error_time > 60:
+            logger.warning(message)
+            self.last_binance_api_error_time = now
+
     def disable_live_mode(self, reason: str):
         if self.config.get("trading_mode") != "live":
             return
@@ -765,7 +837,7 @@ class LiveTrader:
                     "error"
                 )
                 return self.paper_balance
-            logger.error(f"Error fetching live Binance balance: {e}")
+            self._log_binance_api_warning(f"Error fetching live Binance balance: {e}")
         
         return self.paper_balance
 
@@ -872,7 +944,7 @@ class LiveTrader:
                     "error"
                 )
                 return self.active_trades
-            logger.error(f"Error fetching live exchange positions: {e}")
+            self._log_binance_api_warning(f"Error fetching live exchange positions: {e}")
             
         return self.active_trades
 
@@ -1020,39 +1092,62 @@ class LiveTrader:
         market_type = self.config.get("market_type", "futures")
         testnet = self.config.get("testnet", True)
 
-        # 1. Try authenticated client if available
-        if self.client:
-            try:
-                if market_type == "futures":
-                    klines = self.client.futures_klines(symbol=symbol, interval=timeframe, limit=limit)
-                else:
-                    klines = self.client.get_klines(symbol=symbol, interval=timeframe, limit=limit)
-                return self.parse_klines(klines)
-            except Exception:
-                pass
-
-        # 2. Try public REST endpoints fallback
-        try:
-            if market_type == "futures":
-                if testnet:
-                    url = f"https://testnet.binancefuture.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
-                else:
-                    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
+        # Always use public Binance REST endpoints for market data pricing.
+        # Authenticated Binance API access is reserved for live order and account operations only.
+        urls = []
+        if market_type == "futures":
+            if testnet:
+                urls = [
+                    f"https://testnet.binancefuture.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                ]
             else:
-                if testnet:
-                    url = f"https://testnet.binance.vision/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
-                else:
-                    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}"
+                urls = [
+                    f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                    f"https://fapi1.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                    f"https://fapi2.binance.com/fapi/v1/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                ]
+        else:
+            if testnet:
+                urls = [
+                    f"https://testnet.binance.vision/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                ]
+            else:
+                urls = [
+                    f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                    f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                    f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                ]
 
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                klines = response.json()
-                return self.parse_klines(klines)
-            logger.warning(f"Failed to fetch klines for {symbol}: {response.status_code} {response.text[:200]}")
-        except Exception as e:
-            logger.warning(f"Failed to fetch klines for {symbol} via public endpoint: {e}")
-            return None
+        with self._create_requests_session() as session:
+            for url in urls:
+                try:
+                    response = session.get(url, timeout=10)
+                    if response.status_code == 200:
+                        klines = response.json()
+                        return self.parse_klines(klines)
+                    logger.warning(f"Failed to fetch klines for {symbol} from {url}: {response.status_code} {response.text[:200]}")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch klines for {symbol} from {url}: {e}")
 
+        if market_type == "futures":
+            spot_urls = [
+                f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+                f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval={timeframe}&limit={limit}",
+            ]
+            self.log_message(f"[{symbol}] Falling back to spot klines endpoints for futures symbol.", "warning")
+            with self._create_requests_session() as session:
+                for url in spot_urls:
+                    try:
+                        response = session.get(url, timeout=10)
+                        if response.status_code == 200:
+                            klines = response.json()
+                            return self.parse_klines(klines)
+                        logger.warning(f"Failed to fetch fallback klines for {symbol} from {url}: {response.status_code} {response.text[:200]}")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch fallback klines for {symbol} from {url}: {e}")
+
+        logger.error(f"All public Binance kline endpoints failed for {symbol}.")
         return None
 
     async def start(self):
@@ -1570,15 +1665,16 @@ class LiveTrader:
         elif is_new_candle and len(df) > 2:
             if self._is_symbol_frozen(symbol):
                 self.scan_progress += 1
+                self.log_message(f"[{symbol}] Skipping entry because symbol is frozen.", "info")
                 return False
             if self.check_daily_drawdown():
                 self.log_message(f"[{symbol}] Daily drawdown limit reached. Skipping trade entry.", "warning")
-                return
+                return False
 
             max_active = self.config.get("max_active_trades", 5)
             if len(self.active_trades) >= max_active:
-                # Max concurrent positions limit reached
-                return
+                self.log_message(f"[{symbol}] Max active trades reached ({max_active}). Skipping entry.", "info")
+                return False
 
             # We look at the candle that just closed (index -2) to find sweeps & zones
             closed_idx = len(df) - 2
@@ -1625,6 +1721,8 @@ class LiveTrader:
                         
                         if risk_per_share > 0:
                             signal_detected = True
+                    else:
+                        self.log_message(f"[{symbol}] Bullish sweep found but no matching demand zone at idx {closed_idx}.", "info")
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
@@ -1660,6 +1758,8 @@ class LiveTrader:
                         
                         if risk_per_share > 0:
                             signal_detected = True
+                    else:
+                        self.log_message(f"[{symbol}] Bearish sweep found but no matching supply zone at idx {closed_idx}.", "info")
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
