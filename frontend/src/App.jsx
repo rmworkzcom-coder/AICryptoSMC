@@ -227,7 +227,7 @@ export default function App() {
   const [binanceAuthMode, setBinanceAuthMode] = useState(null);
   const [binanceAuthMessage, setBinanceAuthMessage] = useState(null);
   const [websocketStatus, setWebsocketStatus] = useState('disconnected');
-  const [websocketUrl, setWebsocketUrl] = useState(websocketProxyUrl);
+  const [websocketUrl, setWebsocketUrl] = useState('');
   
   const [statusLoaded, setStatusLoaded] = useState(false);
   
