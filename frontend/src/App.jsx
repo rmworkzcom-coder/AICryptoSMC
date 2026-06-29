@@ -349,7 +349,7 @@ export default function App() {
       const msg = JSON.parse(event.data);
       if (msg.type === 'state') {
         const d = msg.data;
-        setBotRunning(d.running);
+        setBotRunning(Boolean(d.running));
         setBotTimeframe(d.timeframe || botTimeframe);
         setBalance(d.balance || d.paper_balance || balance);
         setInitialBalance(typeof d.initial_balance === 'number' ? d.initial_balance : initialBalance);
@@ -2149,13 +2149,19 @@ const styles = {
   },
   dashboardGrid: {
     display: 'grid',
-    gridTemplateColumns: '280px 340px minmax(0, 1fr)',
-    gap: '24px',
+    gridTemplateColumns: '220px 260px minmax(240px, 1fr)',
+    gridAutoRows: 'minmax(min-content, max-content)',
+    gap: '18px',
     alignItems: 'start',
+    minWidth: 0,
+    width: '100%',
+    justifyContent: 'space-between',
   },
   controlCard: {
     position: 'relative',
     overflow: 'hidden',
+    minWidth: 0,
+    minHeight: 0,
   },
   activeGlow: {
     borderColor: 'rgba(16, 185, 129, 0.3)',
@@ -2202,16 +2208,18 @@ const styles = {
     marginTop: '20px',
   },
   scanStatusBarTop: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: '18px',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, minmax(150px, 1fr))',
+    gap: '16px',
     padding: '16px 20px',
     borderRadius: '16px',
-    margin: '20px 40px 0',
+    margin: '20px 20px 0',
     background: 'rgba(15, 23, 42, 0.95)',
     border: '1px solid rgba(148, 163, 184, 0.16)',
-    alignItems: 'center',
+    alignItems: 'start',
     boxShadow: '0 14px 40px rgba(0, 0, 0, 0.18)',
+    width: '100%',
+    minWidth: 0,
   },
   scanStatusBar: {
     display: 'flex',

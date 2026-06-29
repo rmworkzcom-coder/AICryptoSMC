@@ -59,6 +59,7 @@ class LiveTrader:
         self.signals_found = 0
         self.open_trades_created = 0
         self.skipped_symbols = 0
+        self.scan_last_broadcast_at = int(time.time() * 1000)
         
         self.trades_file = os.path.join(os.path.dirname(config_path), "trades.json")
         self.load_trades()
@@ -308,6 +309,7 @@ class LiveTrader:
         try:
             live_balance = await asyncio.to_thread(self.get_live_balance)
             live_active_trades = await asyncio.to_thread(self.get_exchange_positions)
+            self.scan_last_broadcast_at = int(time.time() * 1000)
             await self.websocket_broadcast_callback({
                 "type": "state",
                 "data": {
@@ -335,7 +337,7 @@ class LiveTrader:
                     "binance_auth_message": self.binance_auth_message,
                     "binance_auth_mode": self.binance_auth_mode,
                     "scan_interval_secs": self.config.get("scan_interval_secs", 15),
-                    "scan_last_broadcast_at": int(time.time() * 1000),
+                    "scan_last_broadcast_at": self.scan_last_broadcast_at,
                     "scan_cycle_count": self.scan_cycle_count,
                     "trade_history": self.trade_history
                 }
@@ -1438,37 +1440,41 @@ class LiveTrader:
             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
             if max_trade_loss_pct > 0.0:
                 if trade_type == 'long':
-                    loss_pct = ((entry_price - current_low) / entry_price) * 100.0
+                    worst_price = min(current_price, current_low)
+                    loss_pct = ((entry_price - worst_price) / entry_price) * 100.0
                     if loss_pct >= max_trade_loss_pct:
-                        pnl = (current_low - entry_price) * size
+                        pnl = (worst_price - entry_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD STOP triggered at {current_low:.8f} after {loss_pct:.2f}% loss. Exiting LONG trade.")
-                        self.close_trade(symbol, current_low, pnl, "HARD_STOP")
+                        self.log_message(f"[{symbol}] HARD STOP triggered at {worst_price:.8f} after {loss_pct:.2f}% loss. Exiting LONG trade.")
+                        self.close_trade(symbol, worst_price, pnl, "HARD_STOP")
                         return
                 elif trade_type == 'short':
-                    loss_pct = ((current_high - entry_price) / entry_price) * 100.0
+                    worst_price = max(current_price, current_high)
+                    loss_pct = ((worst_price - entry_price) / entry_price) * 100.0
                     if loss_pct >= max_trade_loss_pct:
-                        pnl = (entry_price - current_high) * size
+                        pnl = (entry_price - worst_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD STOP triggered at {current_high:.8f} after {loss_pct:.2f}% loss. Exiting SHORT trade.")
-                        self.close_trade(symbol, current_high, pnl, "HARD_STOP")
+                        self.log_message(f"[{symbol}] HARD STOP triggered at {worst_price:.8f} after {loss_pct:.2f}% loss. Exiting SHORT trade.")
+                        self.close_trade(symbol, worst_price, pnl, "HARD_STOP")
                         return
             if max_trade_loss_usd > 0.0:
                 if trade_type == 'long':
-                    loss_usd = (entry_price - current_low) * size
+                    worst_price = min(current_price, current_low)
+                    loss_usd = (entry_price - worst_price) * size
                     if loss_usd >= max_trade_loss_usd:
-                        pnl = (current_low - entry_price) * size
+                        pnl = (worst_price - entry_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {current_low:.8f} after ${loss_usd:.2f} loss. Exiting LONG trade.")
-                        self.close_trade(symbol, current_low, pnl, "HARD_LOSS_CAP")
+                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} loss. Exiting LONG trade.")
+                        self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
                         return
                 elif trade_type == 'short':
-                    loss_usd = (current_high - entry_price) * size
+                    worst_price = max(current_price, current_high)
+                    loss_usd = (worst_price - entry_price) * size
                     if loss_usd >= max_trade_loss_usd:
-                        pnl = (entry_price - current_high) * size
+                        pnl = (entry_price - worst_price) * size
                         self.paper_balance += pnl
-                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {current_high:.8f} after ${loss_usd:.2f} loss. Exiting SHORT trade.")
-                        self.close_trade(symbol, current_high, pnl, "HARD_LOSS_CAP")
+                        self.log_message(f"[{symbol}] HARD LOSS CAP triggered at {worst_price:.8f} after ${loss_usd:.2f} loss. Exiting SHORT trade.")
+                        self.close_trade(symbol, worst_price, pnl, "HARD_LOSS_CAP")
                         return
 
             # Read SL again

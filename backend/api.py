@@ -123,7 +123,7 @@ def build_state_payload() -> Dict:
         "binance_auth_message": trader.binance_auth_message,
         "binance_auth_mode": trader.binance_auth_mode,
         "scan_interval_secs": trader.config.get("scan_interval_secs", 15),
-        "scan_last_broadcast_at": int(time.time() * 1000),
+        "scan_last_broadcast_at": getattr(trader, 'scan_last_broadcast_at', int(time.time() * 1000)),
         "trade_history": trader.trade_history
     }
 
