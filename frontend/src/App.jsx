@@ -353,6 +353,8 @@ export default function App() {
         setScanCount(typeof d.scan_count === 'number' ? d.scan_count : Object.keys(d.scanned_symbols_status || {}).length);
         setScanTotal(typeof d.scan_total === 'number' ? d.scan_total : 0);
         setScanSkipped(typeof d.scan_skipped === 'number' ? d.scan_skipped : 0);
+        setSignalsFound(typeof d.signals_found === 'number' ? d.signals_found : 0);
+        setOpenTradesCreated(typeof d.open_trades_created === 'number' ? d.open_trades_created : 0);
         setScanCycleCount(typeof d.scan_cycle_count === 'number' ? d.scan_cycle_count : 0);
         if (typeof d.scan_interval_secs === 'number') {
           setScanIntervalSeconds(d.scan_interval_secs);
@@ -500,6 +502,8 @@ export default function App() {
     setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
     setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
     setScanSkipped(typeof data.scan_skipped === 'number' ? data.scan_skipped : 0);
+    setSignalsFound(typeof data.signals_found === 'number' ? data.signals_found : 0);
+    setOpenTradesCreated(typeof data.open_trades_created === 'number' ? data.open_trades_created : 0);
     setScanCycleCount(typeof data.scan_cycle_count === 'number' ? data.scan_cycle_count : 0);
     if (typeof data.scan_interval_secs === 'number') {
       setScanIntervalSeconds(data.scan_interval_secs);
@@ -744,6 +748,14 @@ export default function App() {
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Active Positions</span>
             <span style={styles.scanStatusValue}>{Object.keys(activeTrades).length}</span>
+          </div>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Signals Found</span>
+            <span style={styles.scanStatusValue}>{signalsFound}</span>
+          </div>
+          <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Trades Opened</span>
+            <span style={styles.scanStatusValue}>{openTradesCreated}</span>
           </div>
           <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Next Scan In</span>

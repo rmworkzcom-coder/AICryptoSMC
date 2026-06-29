@@ -1179,7 +1179,7 @@ class LiveTrader:
                     dfs[symbol] = smc_res['df']
                     
                     # Process signals
-                                if self.process_tick(symbol, smc_res, is_new_candle):
+                    if self.process_tick(symbol, smc_res, is_new_candle):
                         self.signals_found += 1
                     
                     if is_new_candle:
@@ -1672,7 +1672,6 @@ class LiveTrader:
             except Exception:
                 pass
         
-        self.open_trades_created += 1
         if trading_mode == "live" and self.client:
             try:
                 # Fetch precision
