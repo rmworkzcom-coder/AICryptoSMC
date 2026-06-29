@@ -1698,31 +1698,27 @@ class LiveTrader:
                 sweep_type = sweep['type']
                 rr_ratio = self.config.get("rr_ratio", 2.0)
                 risk_pct = self.config.get("risk_pct", 1.0)
-                
+
                 # LONG setup check
                 if current_trend == 'uptrend' and sweep_type == 'bullish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bullish'):
                     sweep_low = sweep['wick_low']
                     demand_zones = [z for z in smc_res['demand_zones'] if z.get('active', True)]
                     matching_zone = None
-                    
+
                     for zone in demand_zones:
                         if zone['start_idx'] < closed_idx:
-                            # Sweep penetrated zone but close was above zone low
                             if sweep_low <= zone['high'] and float(closed_candle['close']) >= zone['low']:
                                 matching_zone = zone
                                 break
-                                
+
                     if matching_zone:
                         entry_price = float(closed_candle['close'])
                         min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
                         raw_stop = sweep_low - (entry_price * 0.001)
                         stop_loss = min(raw_stop, entry_price - min_stop_dist)
                         risk_per_share = entry_price - stop_loss
-                        
+
                         if risk_per_share > 0:
-                            signal_detected = True
-                    else:
-                        self.log_message(f"[{symbol}] Bullish sweep found but no matching demand zone at idx {closed_idx}.", "info")
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
@@ -1733,33 +1729,31 @@ class LiveTrader:
                                 risk_usd = max_trade_loss_usd
                             size = risk_usd / risk_per_share
                             take_profit = entry_price + (rr_ratio * risk_per_share)
-                            
                             self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
+                            signal_detected = True
+                    else:
+                        self.log_message(f"[{symbol}] Bullish sweep found but no matching demand zone at idx {closed_idx}.", "info")
 
                 # SHORT setup check
                 elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep' and self.has_recent_structure(smc_res, closed_idx, 'bearish'):
                     sweep_high = sweep['wick_high']
                     supply_zones = [z for z in smc_res['supply_zones'] if z.get('active', True)]
                     matching_zone = None
-                    
+
                     for zone in supply_zones:
                         if zone['start_idx'] < closed_idx:
-                            # Sweep penetrated zone but close was below zone high
                             if sweep_high >= zone['low'] and float(closed_candle['close']) <= zone['high']:
                                 matching_zone = zone
                                 break
-                                
+
                     if matching_zone:
                         entry_price = float(closed_candle['close'])
                         min_stop_dist = entry_price * 0.005  # Require at least 0.5% stop distance
                         raw_stop = sweep_high + (entry_price * 0.001)
                         stop_loss = max(raw_stop, entry_price + min_stop_dist)
                         risk_per_share = stop_loss - entry_price
-                        
+
                         if risk_per_share > 0:
-                            signal_detected = True
-                    else:
-                        self.log_message(f"[{symbol}] Bearish sweep found but no matching supply zone at idx {closed_idx}.", "info")
                             current_balance = self.get_live_balance()
                             risk_usd = current_balance * (risk_pct / 100.0)
                             max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
@@ -1770,10 +1764,12 @@ class LiveTrader:
                                 risk_usd = max_trade_loss_usd
                             size = risk_usd / risk_per_share
                             take_profit = entry_price - (rr_ratio * risk_per_share)
-                            
                             self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
+                            signal_detected = True
+                    else:
+                        self.log_message(f"[{symbol}] Bearish sweep found but no matching supply zone at idx {closed_idx}.", "info")
 
-        return signal_detected
+            return signal_detected
 
     def get_symbol_precision(self, symbol: str, market_type: str = "futures") -> Tuple[int, int]:
         try:
