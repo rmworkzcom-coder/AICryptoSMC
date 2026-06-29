@@ -429,7 +429,7 @@ export default function App() {
         reconnectTimerRef.current = window.setTimeout(connect, 3000);
       }
     };
-  }, [showNotification, websocketUrl]);
+  }, [showNotification, websocketUrl, fetchStatus]);
 
   const scrollToBottom = useCallback(() => {
     if (consoleContainerRef.current) {
@@ -491,13 +491,13 @@ export default function App() {
     if (!data) {
       return;
     }
-    setBotRunning(data.running);
-    setBotTimeframe(data.timeframe || botTimeframe);
-    setBalance(data.balance || data.paper_balance || balance);
-    setInitialBalance(typeof data.initial_balance === 'number' ? data.initial_balance : initialBalance);
+    setBotRunning(Boolean(data.running));
+    setBotTimeframe(data.timeframe || '15m');
+    setBalance(data.balance || data.paper_balance || 0);
+    setInitialBalance(typeof data.initial_balance === 'number' ? data.initial_balance : DEFAULT_INITIAL_BALANCE);
     setActiveTrades(data.active_trades || {});
-    setLatestPrice(data.latest_price || latestPrice);
-    setLatestTrend(data.latest_trend || latestTrend);
+    setLatestPrice(typeof data.latest_price === 'number' ? data.latest_price : 0);
+    setLatestTrend(data.latest_trend || 'neutral');
     setScannedSymbolsStatus(data.scanned_symbols_status || {});
     setScanCount(typeof data.scan_count === 'number' ? data.scan_count : Object.keys(data.scanned_symbols_status || {}).length);
     setScanTotal(typeof data.scan_total === 'number' ? data.scan_total : 0);
@@ -539,7 +539,7 @@ export default function App() {
       setTradeHistory(data.trade_history);
     }
     setStatusLoaded(true);
-  }, [botTimeframe, balance, initialBalance, latestPrice, latestTrend, safeFetchJson]);
+  }, [safeFetchJson]);
 
   const fetchLogs = useCallback(async () => {
     const data = await safeFetchJson('/logs', {}, []);
