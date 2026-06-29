@@ -2218,19 +2218,19 @@ const styles = {
   scanStatusItem: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: '2px',
     flex: '1 1 0',
-    minWidth: '150px',
+    minWidth: '130px',
   },
   scanStatusLabel: {
-    fontSize: '0.68rem',
+    fontSize: '0.62rem',
     color: 'var(--text-dark)',
     textTransform: 'uppercase',
     letterSpacing: '0.08em',
   },
   scanProgressTrack: {
     width: '100%',
-    height: '6px',
+    height: '5px',
     borderRadius: '999px',
     background: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
@@ -2243,9 +2243,10 @@ const styles = {
     transition: 'width 0.25s ease',
   },
   scanStatusValue: {
-    fontSize: '1rem',
+    fontSize: '0.9rem',
     color: 'var(--text-main)',
     fontWeight: '700',
+    lineHeight: '1.1',
   },
   scanSkippedLabel: {
     fontSize: '0.8rem',

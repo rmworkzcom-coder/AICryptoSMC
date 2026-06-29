@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   server: {
-    host: '127.0.0.1',
+    host: true,
     allowedHosts: ['multivalent-sonya-chopfallen.ngrok-free.dev'],
     port: 3009,
     proxy: {

@@ -64,6 +64,7 @@ async def broadcast_to_websockets(msg: Dict):
 trader.websocket_broadcast_callback = broadcast_to_websockets
 
 def build_state_payload() -> Dict:
+    trader.config = trader.load_config()
     selected_symbol = trader.config.get("selected_symbol", trader.config.get("symbol", "BTCUSDT"))
     latest_close = 0.0
     latest_trend = "neutral"
@@ -90,17 +91,20 @@ def build_state_payload() -> Dict:
     
     total_symbols = trader.scan_total or len(trader.config.get("symbols", []))
     scanned_count = trader.scan_progress if trader.scan_progress > 0 else len(scanned_symbols_status)
-    skipped_count = max(0, total_symbols - scanned_count)
+    skipped_count = trader.skipped_symbols if trader.scan_progress > 0 else 0
+
+    active_trades = trader.active_trades
+    balance = trader.paper_balance
 
     return {
         "running": trader.running,
         "symbol": selected_symbol,
         "selected_symbol": selected_symbol,
         "timeframe": trader.config.get("timeframe"),
-        "active_trades": trader.get_exchange_positions(),
+        "active_trades": active_trades,
         "active_trade": trader.active_trade,
-        "balance": trader.get_live_balance(),
-        "paper_balance": trader.get_live_balance(),
+        "balance": balance,
+        "paper_balance": balance,
         "initial_balance": DEFAULT_INITIAL_BALANCE,
         "latest_price": latest_close,
         "latest_trend": latest_trend,
@@ -108,9 +112,29 @@ def build_state_payload() -> Dict:
         "scan_total": total_symbols,
         "scan_count": scanned_count,
         "scan_skipped": skipped_count,
-            "signals_found": trader.signals_found,
-            "open_trades_created": trader.open_trades_created,
-            "skipped_symbols": trader.skipped_symbols,
+        "signals_found": trader.signals_found,
+        "open_trades_created": trader.open_trades_created,
+        "skipped_symbols": trader.skipped_symbols,
+        "scan_cycle_count": trader.scan_cycle_count,
+        "trading_mode": trader.config.get("trading_mode", "paper"),
+        "portfolio_margin": trader.config.get("portfolio_margin", False),
+        "binance_auth_status": trader.binance_auth_status,
+        "binance_auth_source": trader.binance_auth_source,
+        "binance_auth_message": trader.binance_auth_message,
+        "binance_auth_mode": trader.binance_auth_mode,
+        "scan_interval_secs": trader.config.get("scan_interval_secs", 15),
+        "scan_last_broadcast_at": int(time.time() * 1000),
+        "trade_history": trader.trade_history
+    }
+
+class ConfigUpdate(BaseModel):
+    binance_api_key: Optional[str] = None
+    binance_api_secret: Optional[str] = None
+    testnet: Optional[bool] = None
+    trading_mode: Optional[str] = None
+    symbol: Optional[str] = None
+    timeframe: Optional[str] = None
+    risk_pct: Optional[float] = None
     rr_ratio: Optional[float] = None
     n_swing: Optional[int] = None
     x_impulse: Optional[float] = None
@@ -125,8 +149,6 @@ def build_state_payload() -> Dict:
     selected_symbol: Optional[str] = None
     symbols: Optional[List[str]] = None
     portfolio_margin: Optional[bool] = None
-
-class BacktestRequest(BaseModel):
     symbol: str
     timeframe: str
     initial_balance: float = DEFAULT_INITIAL_BALANCE
@@ -315,48 +337,19 @@ def get_logs(lines: int = 100):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_websockets.append(websocket)
-    # Send initial status
     try:
-        selected_symbol = trader.config.get("selected_symbol", trader.config.get("symbol", "BTCUSDT"))
-        latest_close = 0.0
-        latest_trend = "neutral"
-        
-        df = trader.dfs.get(selected_symbol)
-        if df is not None and len(df) > 0:
-            latest_close = float(df.iloc[-1]['close'])
-            latest_trend = df.iloc[-1].get('trend', 'neutral')
-        elif trader.df is not None and len(trader.df) > 0:
-            latest_close = float(trader.df.iloc[-1]['close'])
-            latest_trend = trader.df.iloc[-1].get('trend', 'neutral')
-            
-        scanned_symbols_status = {}
-        for symbol, df_sym in trader.dfs.items():
-            if len(df_sym) > 0:
-                latest_candle = df_sym.iloc[-1]
-                scanned_symbols_status[symbol] = {
-                    "price": float(latest_candle['close']),
-                    "trend": latest_candle.get('trend', 'neutral'),
-                    "has_active_trade": symbol in trader.active_trades,
-                    "is_swing_high": bool(latest_candle.get('is_swing_high', False)),
-                    "is_swing_low": bool(latest_candle.get('is_swing_low', False))
-                }
-                
-        total_symbols = len(trader.config.get("symbols", []))
-        scanned_count = len(scanned_symbols_status)
-        skipped_count = max(0, total_symbols - scanned_count)
-
         await websocket.send_json({
             "type": "state",
             "data": build_state_payload()
         })
-        
+
         while True:
-            # Keep connection alive
+            # Keep connection alive until the client closes the socket.
             await websocket.receive_text()
     except WebSocketDisconnect:
         if websocket in connected_websockets:
             connected_websockets.remove(websocket)
-    except Exception as e:
+    except Exception:
         logging.exception("WebSocket error")
         if websocket in connected_websockets:
             connected_websockets.remove(websocket)
