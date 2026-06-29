@@ -1398,12 +1398,15 @@ class LiveTrader:
             risk_amount = float(trade.get('risk_amount', 0.0) or 0.0)
             effective_peak_profit_retrace_min_usd = max(peak_profit_retrace_min_usd, risk_amount * 0.25, min_profit_to_keep_usd)
             if peak_profit_retrace_pct > 0.0 and effective_peak_profit_retrace_min_usd > 0.0:
+                # Use the latest close price for current PnL checks (less pessimistic
+                # than using candle low/high which can miss intrabar reversals).
+                current_price = float(current_candle.get('close', current_low if trade_type == 'long' else current_high))
                 if trade_type == 'long':
                     peak_pnl = (peak_price - entry_price) * size
-                    current_pnl = (current_low - entry_price) * size
+                    current_pnl = (current_price - entry_price) * size
                 else:
                     peak_pnl = (entry_price - peak_price) * size
-                    current_pnl = (entry_price - current_high) * size
+                    current_pnl = (entry_price - current_price) * size
 
                 if peak_pnl > 0.0:
                     retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
@@ -1412,11 +1415,25 @@ class LiveTrader:
                         retrace_threshold = max(retrace_threshold, peak_pnl - (risk_amount * 0.5))
 
                     should_close = False
+                    # 1) Percent-based retrace: close when profit falls by the configured
+                    #    percentage from the peak (e.g., 20%). This check is applied
+                    #    when a peak exists to honor the "falls X% from peak" requirement.
+                    if peak_profit_retrace_pct > 0.0 and peak_pnl > 0.0:
+                        perc_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
+                        if current_pnl <= perc_threshold:
+                            should_close = True
+
+                    # 2) Existing effective retrace logic: close when current pnl crosses
+                    #    the adjusted retrace threshold and peak is above configured mins.
                     if peak_pnl >= effective_peak_profit_retrace_min_usd and current_pnl <= retrace_threshold:
                         should_close = True
-                    if peak_pnl >= min_profit_to_keep_usd and current_pnl <= min_profit_to_keep_usd:
+
+                    # 3) Hard close threshold: close when current PnL falls to or below
+                    #    `min_profit_to_keep_usd` (user-requested absolute floor).
+                    if current_pnl <= min_profit_to_keep_usd:
                         should_close = True
 
+                    logging.debug(f"Profit retrace check [{symbol}] peak_pnl={peak_pnl:.2f} current_pnl={current_pnl:.2f} retrace_threshold={retrace_threshold:.2f} min_keep={min_profit_to_keep_usd:.2f} risk={risk_amount:.2f}")
                     if should_close:
                         self.log_message(
                             f"[{symbol}] Profit retrace exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "

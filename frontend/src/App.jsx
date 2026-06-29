@@ -11,7 +11,7 @@ const TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"];
 const DEFAULT_INITIAL_BALANCE = 1600.0;
 
 // SMC Chart Component using Lightweight Charts
-function SMCChart({ data, structures, activeTrade }) {
+function SMCChart({ data, structures, activeTrade, symbol, timeframe }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
 
@@ -167,9 +167,16 @@ function SMCChart({ data, structures, activeTrade }) {
       window.removeEventListener('resize', handleResize);
       chart.remove();
     };
-  }, [data, structures, activeTrade]);
-
-  return <div ref={containerRef} style={{ width: '100%', height: '380px' }} />;
+  }, [data, structures, activeTrade, symbol, timeframe]);
+  return (
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid rgba(255,255,255,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ fontWeight: 700, color: 'var(--text-main)' }}>{symbol || 'UNKNOWN'}</div>
+        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{timeframe || ''}</div>
+      </div>
+      <div ref={containerRef} style={{ width: '100%', height: '380px' }} />
+    </div>
+  );
 }
 
 export default function App() {
