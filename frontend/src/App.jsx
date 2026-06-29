@@ -421,23 +421,23 @@ export default function App() {
             setTradeHistory(d.trade_history);
           }
         } else if (msg.type === 'log') {
-          setLogs(prev => [...prev, msg.data].slice(-100)); // keep last 100
+          setLogs(prev => [...prev, msg.data].slice(-100));
 
           const msgText = msg.data.message || '';
           const lowerMsgText = msgText.toLowerCase();
-          if (
-            msg.data.level === 'ERROR' ||
+
+          const isAuthError = msg.data.level === 'ERROR' ||
             (msg.data.level === 'WARNING' && (
               lowerMsgText.includes('unauthorized') ||
               lowerMsgText.includes('invalid api-key') ||
               lowerMsgText.includes('invalid api-key, ip, or permissions')
-            ))
-          ) {
+            ));
+
+          if (isAuthError) {
             setApiError(msgText);
             showNotification('⚠️ AICryptoSMC API Error', msgText);
           }
 
-          // Notify on trade open / close messages
           if (msg.data.level === 'INFO' && (
             msgText.includes('OPENED') ||
             msgText.includes('LIQUIDATED') ||
