@@ -802,6 +802,24 @@ export default function App() {
             </span>
           </div>
           <div style={styles.scanStatusItem}>
+            <span style={styles.scanStatusLabel}>Connection</span>
+            <span style={{
+              ...styles.scanStatusValue,
+              color: websocketStatus === 'open' ? 'var(--bullish)' : websocketStatus === 'connecting' ? 'var(--accent-teal)' : 'var(--bearish)'
+            }}>
+              {websocketStatus === 'open'
+                ? 'Connected'
+                : websocketStatus === 'connecting'
+                ? 'Connecting'
+                : websocketStatus === 'error'
+                ? 'Error'
+                : websocketStatus === 'closed'
+                ? 'Closed'
+                : 'Disconnected'}
+            </span>
+            <span style={styles.scanStatusSecondary}>{websocketUrl}</span>
+          </div>
+          <div style={styles.scanStatusItem}>
             <span style={styles.scanStatusLabel}>Binance Auth</span>
             <span style={{
               ...styles.scanStatusValue,
