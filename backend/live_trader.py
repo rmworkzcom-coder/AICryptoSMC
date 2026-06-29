@@ -1266,8 +1266,10 @@ class LiveTrader:
 
             # Peak profit retracement exit
             peak_profit_retrace_pct = self.config.get("peak_profit_retrace_pct", 20.0)
-            peak_profit_retrace_min_usd = self.config.get("peak_profit_retrace_min_usd", 10.0)
-            if peak_profit_retrace_pct > 0.0 and peak_profit_retrace_min_usd > 0.0:
+            peak_profit_retrace_min_usd = self.config.get("peak_profit_retrace_min_usd", 0.0)
+            risk_amount = float(trade.get('risk_amount', 0.0) or 0.0)
+            effective_peak_profit_retrace_min_usd = max(peak_profit_retrace_min_usd, risk_amount * 0.25)
+            if peak_profit_retrace_pct > 0.0 and effective_peak_profit_retrace_min_usd > 0.0:
                 if trade_type == 'long':
                     peak_pnl = (peak_price - entry_price) * size
                     current_pnl = (current_low - entry_price) * size
@@ -1275,8 +1277,11 @@ class LiveTrader:
                     peak_pnl = (entry_price - peak_price) * size
                     current_pnl = (entry_price - current_high) * size
 
-                if peak_pnl >= peak_profit_retrace_min_usd:
+                if peak_pnl >= effective_peak_profit_retrace_min_usd:
                     retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
+                    # Avoid retrace thresholds smaller than half the original risk amount.
+                    if risk_amount > 0.0:
+                        retrace_threshold = max(retrace_threshold, peak_pnl - (risk_amount * 0.5))
                     if current_pnl <= retrace_threshold:
                         self.log_message(
                             f"[{symbol}] Peak profit retracement exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "
