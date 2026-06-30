@@ -4,6 +4,7 @@ import logging
 import asyncio
 import time
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
@@ -54,9 +55,11 @@ async def broadcast_to_websockets(msg: Dict):
 
     async def _send(ws: WebSocket):
         try:
-            await asyncio.wait_for(ws.send_json(msg), timeout=3)
+            # Ensure message is JSON serializable
+            encoded = jsonable_encoder(msg)
+            await asyncio.wait_for(ws.send_json(encoded), timeout=5)
         except Exception as e:
-            logging.debug(f"WebSocket send failed: {e}")
+            logging.exception("WebSocket send failed")
             to_remove.append(ws)
 
     for ws in list(connected_websockets):
@@ -354,12 +357,18 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # Send initial full state
         try:
-            await asyncio.wait_for(websocket.send_json({
-                "type": "state",
-                "data": build_state_payload()
-            }), timeout=3)
+            state = build_state_payload()
+            encoded_state = jsonable_encoder(state)
+            # send the encoded state; increase timeout slightly for first send
+            await asyncio.wait_for(websocket.send_json({"type": "state", "data": encoded_state}), timeout=5)
         except Exception:
             # If initial send fails, close connection gracefully
+            logging.exception("Failed to send initial websocket state; attempting minimal handshake")
+            try:
+                minimal = {"type": "state", "data": {"running": bool(getattr(trader, 'running', False))}}
+                await asyncio.wait_for(websocket.send_json(minimal), timeout=3)
+            except Exception:
+                logging.exception("Failed to send minimal websocket handshake")
             raise
 
         # Keep connection alive. Use a receive timeout so we can periodically

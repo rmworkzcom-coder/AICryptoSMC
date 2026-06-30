@@ -68,6 +68,12 @@ class LiveTrader:
         self.trades_file = os.path.join(os.path.dirname(config_path), "trades.json")
         self.requests_session = self._create_requests_session()
         self.load_trades()
+        # Cache for environment key lookups to avoid repeated file reads/log spam
+        # Stored as (key, secret, source, timestamp)
+        # Increase cache lifetime so per-symbol calls don't trigger disk or noisy INFO logs.
+        self._env_keys_cache = (None, None, None, 0.0)
+        # Portfolio-level peak tracking for total PnL protection
+        self.peak_total_pnl = float(self.paper_balance - DEFAULT_INITIAL_BALANCE)
 
     @property
     def active_trade(self) -> Optional[Dict]:
@@ -497,16 +503,25 @@ class LiveTrader:
         }
 
     def load_env_keys(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        # Use cached values if recent (longer-lived cache to avoid hot paths)
+        now = time.time()
+        cached_key, cached_secret, cached_source, cached_at = self._env_keys_cache
+        CACHE_LIFETIME = 3600.0  # seconds
+        if cached_at and (now - cached_at) < CACHE_LIFETIME:
+            return cached_key, cached_secret, cached_source
+
         env_key = os.environ.get("BINANCE_KEY") or os.environ.get("BINANCE_API_KEY")
         env_secret = os.environ.get("BINANCE_SECRET") or os.environ.get("BINANCE_API_SECRET")
-        if env_key and env_secret and not (
-            self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
-        ):
+            if env_key and env_secret and not (
+                self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
+            ):
             os.environ.setdefault("BINANCE_API_KEY", env_key)
             os.environ.setdefault("BINANCE_KEY", env_key)
             os.environ.setdefault("BINANCE_API_SECRET", env_secret)
             os.environ.setdefault("BINANCE_SECRET", env_secret)
-            logger.info("Loaded Binance API keys from environment variables.")
+            # Use DEBUG here to avoid spamming INFO in hot code paths.
+            logger.debug("Loaded Binance API keys from environment variables.")
+            self._env_keys_cache = (env_key, env_secret, "environment variables", now)
             return env_key, env_secret, "environment variables"
 
         search_paths = [
@@ -534,18 +549,23 @@ class LiveTrader:
                                     key = v
                                 elif k in ["BINANCE_SECRET", "BINANCE_API_SECRET"]:
                                     secret = v
-                        if key and secret and not (
-                            self.is_placeholder_key(key) or self.is_placeholder_key(secret)
-                        ):
-                            os.environ.setdefault("BINANCE_API_KEY", key)
-                            os.environ.setdefault("BINANCE_KEY", key)
-                            os.environ.setdefault("BINANCE_API_SECRET", secret)
-                            os.environ.setdefault("BINANCE_SECRET", secret)
-                            logger.info(f"Loaded Binance API keys from {path}")
+                            if key and secret and not (
+                                self.is_placeholder_key(key) or self.is_placeholder_key(secret)
+                            ):
+                                os.environ.setdefault("BINANCE_API_KEY", key)
+                                os.environ.setdefault("BINANCE_KEY", key)
+                                os.environ.setdefault("BINANCE_API_SECRET", secret)
+                                os.environ.setdefault("BINANCE_SECRET", secret)
+                                # Lower verbosity for file loads; keep timestamped cache to prevent repeats
+                                logger.debug(f"Loaded Binance API keys from {path}")
+                                self._env_keys_cache = (key, secret, path, now)
                             return key, secret, path
                 except Exception as e:
                     logger.error(f"Error reading env file at {path}: {e}")
-        logger.info("No Binance API keys found in environment or .env file search paths")
+
+        # No keys found — cache negative result to avoid repeated disk checks
+        self._env_keys_cache = (None, None, None, now)
+        logger.debug("No Binance API keys found in environment or .env file search paths")
         return None, None, None
 
     def init_binance_client(self):
@@ -578,7 +598,8 @@ class LiveTrader:
             if env_key and env_secret:
                 api_key = env_key
                 api_secret = env_secret
-                self.log_message("Automatically loaded Binance API keys from environment or .env file.")
+                # Use debug log here to avoid frequent INFO-level broadcasts to the frontend.
+                logger.debug("Automatically loaded Binance API keys from environment or .env file.")
                 if self.is_placeholder_key(self.config.get("binance_api_key")) or self.is_placeholder_key(self.config.get("binance_api_secret")):
                     self.config["binance_api_key"] = ""
                     self.config["binance_api_secret"] = ""
@@ -840,6 +861,35 @@ class LiveTrader:
             self._log_binance_api_warning(f"Error fetching live Binance balance: {e}")
         
         return self.paper_balance
+
+    def get_total_unrealized(self) -> float:
+        """Sum of unrealized pnl across active trades (uses stored mark_price or df close)."""
+        total = 0.0
+        for sym, t in self.active_trades.items():
+            try:
+                entry = float(t.get('entry_price', 0.0) or 0.0)
+                size = float(t.get('size', 0.0) or 0.0)
+                trade_type = t.get('type', 'long')
+                mark = float(t.get('mark_price', 0.0) or 0.0)
+                if mark <= 0.0:
+                    # fallback to latest dataframe close
+                    df = self.dfs.get(sym)
+                    if df is not None and len(df) > 0:
+                        mark = float(df.iloc[-1]['close'])
+                if entry > 0 and size > 0 and mark > 0:
+                    if trade_type == 'long':
+                        total += (mark - entry) * size
+                    else:
+                        total += (entry - mark) * size
+            except Exception:
+                continue
+        return total
+
+    def get_total_pnl(self) -> float:
+        """Total PnL = realized (paper_balance - initial) + unrealized across active trades."""
+        realized = float(self.paper_balance - DEFAULT_INITIAL_BALANCE)
+        unrealized = float(self.get_total_unrealized())
+        return realized + unrealized
 
     def get_exchange_positions(self) -> Dict[str, Dict]:
         """
@@ -1341,6 +1391,31 @@ class LiveTrader:
                 elapsed = time.time() - start_time
                 self.log_message(f"[Scanner] Scanned {len(dfs)}/{len(symbols)} symbols concurrently in {elapsed:.2f}s. Active positions: {len(self.active_trades)}.")
 
+                # Portfolio-level peak PnL protection: compute total PnL and update/compare peak
+                try:
+                    total_pnl = self.get_total_pnl()
+                    # initialize peak if it's lower
+                    if total_pnl > self.peak_total_pnl:
+                        self.peak_total_pnl = total_pnl
+
+                    portfolio_retrace_pct = float(self.config.get('portfolio_retrace_pct', 20.0))
+                    if portfolio_retrace_pct > 0 and self.peak_total_pnl > 0:
+                        retrace_threshold = self.peak_total_pnl * (1.0 - portfolio_retrace_pct / 100.0)
+                        if total_pnl <= retrace_threshold:
+                            # Liquidate all positions and freeze entries for configured duration
+                            freeze_secs = int(self.config.get('loss_freeze_duration_secs', 3600))
+                            self.log_message(f"[Portfolio] Total PnL retrace triggered. Peak: {self.peak_total_pnl:.2f}, Current: {total_pnl:.2f}, threshold: {retrace_threshold:.2f}. Liquidating all positions and freezing entries for {freeze_secs}s.")
+                            # Freeze symbols to prevent immediate reentries
+                            now = time.time()
+                            for sym in list(self.active_trades.keys()):
+                                self.frozen_symbols[sym] = now + freeze_secs
+                            # Liquidate
+                            await asyncio.to_thread(self.liquidate_all_trades)
+                            # reset peak tracker to current total after action
+                            self.peak_total_pnl = total_pnl
+                except Exception as e:
+                    logger.exception(f"Error in portfolio retrace protection: {e}")
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -1408,43 +1483,50 @@ class LiveTrader:
                     peak_pnl = (entry_price - peak_price) * size
                     current_pnl = (entry_price - current_price) * size
 
+                retrace_threshold = 0.0
                 if peak_pnl > 0.0:
                     retrace_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
                     # Avoid retrace thresholds smaller than half the original risk amount.
                     if risk_amount > 0.0:
                         retrace_threshold = max(retrace_threshold, peak_pnl - (risk_amount * 0.5))
 
-                    should_close = False
-                    # 1) Percent-based retrace: close when profit falls by the configured
-                    #    percentage from the peak (e.g., 20%). This check is applied
-                    #    when a peak exists to honor the "falls X% from peak" requirement.
-                    if peak_profit_retrace_pct > 0.0 and peak_pnl > 0.0:
+                    # Percent-based retrace: close when profit falls by the configured
+                    # percentage from the peak (e.g., 20%). This check is applied
+                    # when a peak exists to honor the "falls X% from peak" requirement.
+                    if peak_profit_retrace_pct > 0.0:
                         perc_threshold = peak_pnl * (1.0 - peak_profit_retrace_pct / 100.0)
                         if current_pnl <= perc_threshold:
-                            should_close = True
+                            self.log_message(
+                                f"[{symbol}] Percent-from-peak retrace triggered. Peak PnL: {peak_pnl:.2f}, Current PnL: {current_pnl:.2f}, perc_threshold: {perc_threshold:.2f}"
+                            )
+                            pnl = current_pnl
+                            self.paper_balance += pnl
+                            exit_price = current_low if trade_type == 'long' else current_high
+                            self.close_trade(symbol, exit_price, pnl, "PROFIT_RETRACE")
+                            return
 
-                    # 2) Existing effective retrace logic: close when current pnl crosses
-                    #    the adjusted retrace threshold and peak is above configured mins.
+                    # Existing effective retrace logic: close when current pnl crosses
+                    # the adjusted retrace threshold and peak is above configured mins.
                     if peak_pnl >= effective_peak_profit_retrace_min_usd and current_pnl <= retrace_threshold:
-                        should_close = True
-
-                    # 3) Hard close threshold: close when current PnL falls to or below
-                    #    `min_profit_to_keep_usd` (user-requested absolute floor).
-                    if current_pnl <= min_profit_to_keep_usd:
-                        should_close = True
-
-                    logging.debug(f"Profit retrace check [{symbol}] peak_pnl={peak_pnl:.2f} current_pnl={current_pnl:.2f} retrace_threshold={retrace_threshold:.2f} min_keep={min_profit_to_keep_usd:.2f} risk={risk_amount:.2f}")
-                    if should_close:
                         self.log_message(
-                            f"[{symbol}] Profit retrace exit triggered at {current_low if trade_type == 'long' else current_high:.8f}. "
-                            f"Peak PnL: {peak_pnl:.2f}, Current PnL: {current_pnl:.2f}, "
-                            f"retrace threshold: {retrace_threshold:.2f}, min keep profit: {min_profit_to_keep_usd:.2f}."
+                            f"[{symbol}] Effective retrace threshold triggered. Peak PnL: {peak_pnl:.2f}, Current: {current_pnl:.2f}, retrace_threshold: {retrace_threshold:.2f}"
                         )
                         pnl = current_pnl
                         self.paper_balance += pnl
                         exit_price = current_low if trade_type == 'long' else current_high
                         self.close_trade(symbol, exit_price, pnl, "PROFIT_RETRACE")
                         return
+
+                # Hard close threshold: apply regardless of whether a positive peak was recorded.
+                if current_pnl <= min_profit_to_keep_usd:
+                    self.log_message(
+                        f"[{symbol}] Hard-floor close: current PnL {current_pnl:.2f} <= min keep {min_profit_to_keep_usd:.2f}. Closing."
+                    )
+                    pnl = current_pnl
+                    self.paper_balance += pnl
+                    exit_price = current_low if trade_type == 'long' else current_high
+                    self.close_trade(symbol, exit_price, pnl, "HARD_FLOOR")
+                    return
 
             # Immediate risk amount exit
             risk_amount = float(trade.get('risk_amount', 0.0) or 0.0)
