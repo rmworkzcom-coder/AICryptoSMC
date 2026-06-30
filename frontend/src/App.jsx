@@ -282,6 +282,7 @@ export default function App() {
   // References
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
   const shouldReconnectRef = useRef(true);
   const logsEndRef = useRef(null);
   const consoleContainerRef = useRef(null);
@@ -372,6 +373,7 @@ export default function App() {
     ws.onopen = () => {
       clearReconnectTimer();
       clearHeartbeatTimer();
+      reconnectAttemptRef.current = 0;
       setWebsocketStatus('open');
       setWebsocketErrorMessage(null);
       console.debug('[WebSocket] connection opened', targetUrl);
@@ -392,7 +394,11 @@ export default function App() {
     ws.onerror = (event) => {
       console.debug('[WebSocket] error', event, 'url=', targetUrl);
       setWebsocketStatus('error');
-      setWebsocketErrorMessage(event?.message ? String(event.message) : `WebSocket connection error (${targetUrl})`);
+      const errMsg = event?.message ? String(event.message) : `WebSocket connection error (${targetUrl})`;
+      const attempt = (reconnectAttemptRef.current || 0) + 1;
+      reconnectAttemptRef.current = attempt;
+      const delay = Math.min(30000, 1000 * Math.pow(2, attempt));
+      setWebsocketErrorMessage(`${errMsg}. Reconnecting in ${Math.round(delay/1000)}s...`);
       fetchStatusRef.current?.();
       clearHeartbeatTimer();
       if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
@@ -402,11 +408,11 @@ export default function App() {
         return;
       }
       if (targetUrl === websocketDirectUrl && websocketProxyUrl !== websocketDirectUrl) {
-        reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
+        reconnectTimerRef.current = window.setTimeout(() => connect(false), delay);
       } else if (targetUrl !== websocketDirectUrl && websocketDirectUrl) {
-        reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
+        reconnectTimerRef.current = window.setTimeout(() => connect(true), delay);
       } else {
-        reconnectTimerRef.current = window.setTimeout(() => connect(false), 5000);
+        reconnectTimerRef.current = window.setTimeout(() => connect(false), delay);
       }
     };
 
@@ -506,17 +512,30 @@ export default function App() {
       wsRef.current = null;
       const closedReason = event?.reason ? ` (${event.reason})` : '';
       setWebsocketStatus('closed');
-      setWebsocketErrorMessage(event?.wasClean === false ? `Socket closed unexpectedly${closedReason}` : null);
+      const wasClean = event?.wasClean === true;
+      const code = event?.code || 'unknown';
+      const baseMsg = wasClean ? null : `Socket closed unexpectedly (code: ${code})${closedReason}`;
+      if (baseMsg) {
+        const attempt = (reconnectAttemptRef.current || 0) + 1;
+        reconnectAttemptRef.current = attempt;
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempt));
+        setWebsocketErrorMessage(`${baseMsg}. Reconnecting in ${Math.round(delay/1000)}s...`);
+        if (shouldReconnectRef.current) {
+          if (targetUrl === websocketDirectUrl && websocketProxyUrl !== websocketDirectUrl) {
+            reconnectTimerRef.current = window.setTimeout(() => connect(false), delay);
+          } else if (targetUrl !== websocketDirectUrl && websocketDirectUrl) {
+            reconnectTimerRef.current = window.setTimeout(() => connect(true), delay);
+          } else {
+            reconnectTimerRef.current = window.setTimeout(() => connect(false), delay);
+          }
+        }
+      } else {
+        setWebsocketErrorMessage(null);
+      }
       fetchStatusRef.current?.();
       if (shouldReconnectRef.current) {
         console.debug('[WebSocket] closed', event, 'url=', targetUrl);
-        if (targetUrl === websocketDirectUrl && websocketProxyUrl !== websocketDirectUrl) {
-          reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
-        } else if (targetUrl !== websocketDirectUrl && websocketDirectUrl) {
-          reconnectTimerRef.current = window.setTimeout(() => connect(true), 3000);
-        } else {
-          reconnectTimerRef.current = window.setTimeout(() => connect(false), 3000);
-        }
+        // reconnect already scheduled above for unexpected closes
       }
     };
   }, [clearHeartbeatTimer, clearReconnectTimer, showNotification, websocketProxyUrl, websocketDirectUrl]);

@@ -18,7 +18,7 @@ from backend.smc_engine import calculate_smc
 from backend.constants import DEFAULT_INITIAL_BALANCE
 
 logger = logging.getLogger("live_trader")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 # Create a local file logger
 log_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1816,7 +1816,8 @@ class LiveTrader:
             if adx_threshold > 0.0:
                 candle_adx = closed_candle.get('adx', 0.0)
                 if candle_adx < adx_threshold:
-                    return
+                    self.log_message(f"[{symbol}] ADX {candle_adx:.2f} < threshold {adx_threshold}. Skipping entry.", "debug")
+                    return False
 
             closed_time = int(closed_candle['timestamp'])
             current_trend = closed_candle.get('trend', 'neutral')
@@ -1851,17 +1852,25 @@ class LiveTrader:
                             stop_loss = min(raw_stop, entry_price - min_stop_dist)
                             risk_per_share = entry_price - stop_loss
 
-                            if risk_per_share > 0:
-                                current_balance = self.get_live_balance()
-                                risk_usd = current_balance * (risk_pct / 100.0)
-                                max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
-                                if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
-                                    self.log_message(
-                                        f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
-                                    )
-                                    risk_usd = max_trade_loss_usd
-                                size = risk_usd / risk_per_share
-                                take_profit = entry_price + (rr_ratio * risk_per_share)
+                            self.log_message(f"[{symbol}] Computed risk_per_share={risk_per_share:.8f} for entry_price={entry_price:.8f} and stop_loss={stop_loss:.8f}", "debug")
+                            if not (isinstance(risk_per_share, (int, float)) and risk_per_share > 0):
+                                self.log_message(f"[{symbol}] Invalid risk_per_share ({risk_per_share}). Skipping entry.", "debug")
+                                return False
+
+                            current_balance = self.get_live_balance()
+                            risk_usd = current_balance * (risk_pct / 100.0)
+                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                self.log_message(
+                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                )
+                                risk_usd = max_trade_loss_usd
+                            size = risk_usd / risk_per_share if risk_per_share > 0 else 0.0
+                            take_profit = entry_price + (rr_ratio * risk_per_share)
+                            self.log_message(f"[{symbol}] Entry sizing: balance={current_balance:.2f}, risk_pct={risk_pct}, risk_usd={risk_usd:.2f}, size={size:.6f}", "debug")
+                            if not (isinstance(size, (int, float)) and size > 0):
+                                self.log_message(f"[{symbol}] Computed trade size {size} is non-positive. Skipping entry.", "debug")
+                            else:
                                 self.open_trade(symbol, 'long', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
                                 signal_detected = True
                         else:
@@ -1896,18 +1905,25 @@ class LiveTrader:
                             raw_stop = sweep_high + (entry_price * 0.001)
                             stop_loss = max(raw_stop, entry_price + min_stop_dist)
                             risk_per_share = stop_loss - entry_price
+                            self.log_message(f"[{symbol}] Computed risk_per_share={risk_per_share:.8f} for entry_price={entry_price:.8f} and stop_loss={stop_loss:.8f}", "debug")
+                            if not (isinstance(risk_per_share, (int, float)) and risk_per_share > 0):
+                                self.log_message(f"[{symbol}] Invalid risk_per_share ({risk_per_share}). Skipping entry.", "debug")
+                                return False
 
-                            if risk_per_share > 0:
-                                current_balance = self.get_live_balance()
-                                risk_usd = current_balance * (risk_pct / 100.0)
-                                max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
-                                if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
-                                    self.log_message(
-                                        f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
-                                    )
-                                    risk_usd = max_trade_loss_usd
-                                size = risk_usd / risk_per_share
-                                take_profit = entry_price - (rr_ratio * risk_per_share)
+                            current_balance = self.get_live_balance()
+                            risk_usd = current_balance * (risk_pct / 100.0)
+                            max_trade_loss_usd = self.config.get("max_trade_loss_usd", 0.0)
+                            if max_trade_loss_usd > 0.0 and risk_usd > max_trade_loss_usd:
+                                self.log_message(
+                                    f"[{symbol}] Risk capped from ${risk_usd:.2f} to ${max_trade_loss_usd:.2f} due to max_trade_loss_usd."
+                                )
+                                risk_usd = max_trade_loss_usd
+                            size = risk_usd / risk_per_share if risk_per_share > 0 else 0.0
+                            take_profit = entry_price - (rr_ratio * risk_per_share)
+                            self.log_message(f"[{symbol}] Entry sizing: balance={current_balance:.2f}, risk_pct={risk_pct}, risk_usd={risk_usd:.2f}, size={size:.6f}", "debug")
+                            if not (isinstance(size, (int, float)) and size > 0):
+                                self.log_message(f"[{symbol}] Computed trade size {size} is non-positive. Skipping entry.", "debug")
+                            else:
                                 self.open_trade(symbol, 'short', entry_price, stop_loss, take_profit, size, risk_usd, closed_time, closed_idx)
                                 signal_detected = True
                         else:
