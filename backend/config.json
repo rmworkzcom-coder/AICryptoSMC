@@ -1,7 +1,7 @@
 {
-  "binance_api_key": "<YOUR_KEY>",
-  "binance_api_secret": "<YOUR_SECRET>",
-  "testnet": false,
+  "binance_api_key": "mFMZQ71twT7gVujePVEyNyuTCbhUcWXWMtgZvpkEtlPqeZ1YZ7r9FUk6eiBt6MqJ",
+  "binance_api_secret": "bmGfhiBHwnSlJYTp5X2IzcoCsA60dGdxFNVMSXDHcpG35itF5qISoMfospPiSJGK",
+  "testnet": true,
   "trading_mode": "live",
   "daily_drawdown_limit_pct": 0.0,
   "adx_threshold": 18.0,
