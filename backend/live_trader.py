@@ -44,6 +44,10 @@ class LiveTrader:
         self.binance_auth_source = None
         self.binance_auth_message = None
         self.binance_auth_mode = None
+        # Cache the last successful auth so UI can display recent success even
+        # if transient network issues make the current live check fail.
+        # Stored as (status, source, mode, timestamp)
+        self._last_successful_auth = (None, None, None, 0.0)
         
         # Multi-symbol trading state
         self.active_trades = {}  # symbol -> trade dict
@@ -487,6 +491,9 @@ class LiveTrader:
         self.binance_auth_source = source
         self.binance_auth_message = message
         self.binance_auth_mode = mode
+        # Update last successful auth cache
+        if status == 'success':
+            self._last_successful_auth = (status, source, mode, time.time())
 
     def is_placeholder_key(self, key: Optional[str]) -> bool:
         if not key:
@@ -1854,7 +1861,11 @@ class LiveTrader:
             if adx_threshold > 0.0:
                 candle_adx = closed_candle.get('adx', 0.0)
                 if candle_adx < adx_threshold:
-                    self.log_message(f"[{symbol}] ADX {candle_adx:.2f} < threshold {adx_threshold}. Skipping entry.", "debug")
+                    # Optionally emit per-symbol debug info if requested
+                    if self.config.get("per_symbol_debug", False):
+                        self.log_message(f"[{symbol}] ADX {candle_adx:.2f} < threshold {adx_threshold}. (per_symbol_debug enabled)", "info")
+                    else:
+                        self.log_message(f"[{symbol}] ADX {candle_adx:.2f} < threshold {adx_threshold}. Skipping entry.", "debug")
                     return False
 
             closed_time = int(closed_candle['timestamp'])
@@ -1872,7 +1883,9 @@ class LiveTrader:
                 # LONG setup check
                 if current_trend == 'uptrend' and sweep_type == 'bullish_sweep':
                     recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bullish')
-                    if recent_structures:
+                    # Allow bypass of the recent-structure gate for testing via config flag
+                    bypass_structure = bool(self.config.get("bypass_structure_check", False))
+                    if recent_structures or bypass_structure:
                         sweep_low = sweep.get('wick_low') if isinstance(sweep, dict) else None
                         demand_zones = [z for z in smc_res.get('demand_zones', []) if z.get('active', True)]
                         matching_zone = None
@@ -1918,15 +1931,23 @@ class LiveTrader:
                                 "info"
                             )
                     else:
-                        self.log_message(
-                            f"[{symbol}] Bullish sweep found at idx {closed_idx} but no recent bullish structure within lookback={self.config.get('structure_lookback', 3)}.",
-                            "info"
-                        )
+                        # Detailed debugging output when per-symbol debug is enabled
+                        if self.config.get("per_symbol_debug", False):
+                            self.log_message(
+                                f"[{symbol}] Bullish sweep at idx {closed_idx} rejected: no recent bullish structure. lookback={self.config.get('structure_lookback', 3)}. smc_summary={{'demand_zones':{len(smc_res.get('demand_zones',[]))}, 'bos':{len(smc_res.get('bos',[]))}, 'choch':{len(smc_res.get('choch',[]))}}}",
+                                "info"
+                            )
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Bullish sweep found at idx {closed_idx} but no recent bullish structure within lookback={self.config.get('structure_lookback', 3)}.",
+                                "info"
+                            )
 
                 # SHORT setup check
                 elif current_trend == 'downtrend' and sweep_type == 'bearish_sweep':
                     recent_structures = self.get_recent_structures(smc_res, closed_idx, 'bearish')
-                    if recent_structures:
+                    bypass_structure = bool(self.config.get("bypass_structure_check", False))
+                    if recent_structures or bypass_structure:
                         sweep_high = sweep.get('wick_high') if isinstance(sweep, dict) else None
                         supply_zones = [z for z in smc_res.get('supply_zones', []) if z.get('active', True)]
                         matching_zone = None
@@ -1971,10 +1992,16 @@ class LiveTrader:
                                 "info"
                             )
                     else:
-                        self.log_message(
-                            f"[{symbol}] Bearish sweep found at idx {closed_idx} but no recent bearish structure within lookback={self.config.get('structure_lookback', 3)}.",
-                            "info"
-                        )
+                        if self.config.get("per_symbol_debug", False):
+                            self.log_message(
+                                f"[{symbol}] Bearish sweep at idx {closed_idx} rejected: no recent bearish structure. lookback={self.config.get('structure_lookback', 3)}. smc_summary={{'supply_zones':{len(smc_res.get('supply_zones',[]))}, 'bos':{len(smc_res.get('bos',[]))}, 'choch':{len(smc_res.get('choch',[]))}}}",
+                                "info"
+                            )
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Bearish sweep found at idx {closed_idx} but no recent bearish structure within lookback={self.config.get('structure_lookback', 3)}.",
+                                "info"
+                            )
 
             return signal_detected
 

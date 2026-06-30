@@ -132,6 +132,7 @@ def build_state_payload() -> Dict:
             auth_status = "failed"
 
     return {
+        "scanning": getattr(trader, 'scanning', False),
         "running": trader.running,
         "symbol": selected_symbol,
         "selected_symbol": selected_symbol,
@@ -157,6 +158,9 @@ def build_state_payload() -> Dict:
         "binance_auth_source": trader.binance_auth_source,
         "binance_auth_message": trader.binance_auth_message,
         "binance_auth_mode": trader.binance_auth_mode,
+        # If the live status is not success but we have a recent successful auth,
+        # expose that to the UI so transient failures don't immediately flip the dashboard.
+        "binance_last_success": getattr(trader, '_last_successful_auth', (None, None, None, 0.0)),
         "scan_interval_secs": trader.config.get("scan_interval_secs", 15),
         "scan_last_broadcast_at": getattr(trader, 'scan_last_broadcast_at', int(time.time() * 1000)),
         "trade_history": trader.trade_history
