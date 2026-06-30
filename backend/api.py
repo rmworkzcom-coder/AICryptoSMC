@@ -236,6 +236,24 @@ async def stop_bot():
 def get_status():
     return build_state_payload()
 
+
+@app.post("/bot/check-auth")
+def check_auth():
+    """Trigger a lightweight auth check using keys from environment or .env files
+    without enabling live trading. Returns current auth status and message.
+    """
+    try:
+        ok = trader.check_env_auth()
+        return {
+            "success": bool(ok),
+            "binance_auth_status": trader.binance_auth_status,
+            "binance_auth_message": trader.binance_auth_message,
+            "binance_auth_source": trader.binance_auth_source,
+            "binance_auth_mode": trader.binance_auth_mode,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/trades")
 async def get_trades():
     return {

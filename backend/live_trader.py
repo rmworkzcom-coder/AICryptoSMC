@@ -763,6 +763,43 @@ class LiveTrader:
                 return True
         return False
 
+    def check_env_auth(self) -> bool:
+        """Lightweight check of Binance API keys found in environment or .env files
+        without enabling live trading. Returns True on verified auth, False otherwise.
+        Updates `binance_auth_status`, `binance_auth_source`, and `binance_auth_message`.
+        """
+        # Clear short-lived negative cache so we always re-check on-demand
+        self._env_keys_cache = (None, None, None, 0.0)
+        api_key, api_secret, source = self.load_env_keys()
+        if not api_key or not api_secret:
+            self._set_auth_status("failed", None, "No Binance API keys found in environment or .env files.", None)
+            return False
+
+        # Try Portfolio Margin PAPI first (some accounts require this)
+        try:
+            try:
+                res = self._make_papi_request("GET", "/papi/v1/balance")
+                self._set_auth_status("success", source, "Portfolio Margin PAPI auth succeeded.", mode="portfolio_margin")
+                return True
+            except Exception:
+                # fall through to standard client-based checks
+                pass
+
+            tmp_client = Client(api_key, api_secret, testnet=self.config.get("testnet", False), requests_params={"timeout": 10})
+            market_type = self.config.get("market_type", "futures")
+            if market_type == "futures":
+                tmp_client.futures_account_balance()
+                mode = "futures"
+            else:
+                tmp_client.get_asset_balance(asset="USDT")
+                mode = "spot"
+
+            self._set_auth_status("success", source, f"Binance API auth verified via {mode} API.", mode=mode)
+            return True
+        except Exception as e:
+            self._set_auth_status("failed", source, f"Auth check failed: {e}", None)
+            return False
+
     def _log_binance_api_warning(self, message: str):
         now = time.time()
         if now - self.last_binance_api_error_time > 60:
