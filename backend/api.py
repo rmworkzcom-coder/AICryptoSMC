@@ -59,7 +59,13 @@ async def broadcast_to_websockets(msg: Dict):
             encoded = jsonable_encoder(msg)
             await asyncio.wait_for(ws.send_json(encoded), timeout=5)
         except Exception as e:
-            logging.exception("WebSocket send failed")
+            # Log detailed info for debugging intermittent websocket failures
+            client_info = getattr(ws, 'client', None)
+            try:
+                logging.error(f"WebSocket send failed to client={client_info}: {e}")
+                logging.exception(e)
+            except Exception:
+                logging.exception("WebSocket send failed (error while logging client info)")
             to_remove.append(ws)
 
     for ws in list(connected_websockets):
@@ -178,6 +184,19 @@ class ConfigUpdate(BaseModel):
     selected_symbol: Optional[str] = None
     symbols: Optional[List[str]] = None
     portfolio_margin: Optional[bool] = None
+    symbol: str
+    timeframe: str
+    initial_balance: float = DEFAULT_INITIAL_BALANCE
+    risk_pct: float = 1.0
+    rr_ratio: float = 2.0
+    n_swing: int = 2
+    x_impulse: float = 2.0
+    m_range: int = 5
+    breakeven_trigger: float = 1.0
+    limit: int = 500
+
+
+class BacktestRequest(BaseModel):
     symbol: str
     timeframe: str
     initial_balance: float = DEFAULT_INITIAL_BALANCE
@@ -367,27 +386,27 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_websockets.append(websocket)
     try:
-        # Send initial full state
+        # Send a minimal initial handshake only. The frontend will fetch full status via HTTP.
         try:
-            state = build_state_payload()
-            encoded_state = jsonable_encoder(state)
-            # send the encoded state; increase timeout slightly for first send
-            await asyncio.wait_for(websocket.send_json({"type": "state", "data": encoded_state}), timeout=5)
+            minimal = {
+                "type": "state",
+                "data": {
+                    "running": bool(getattr(trader, 'running', False)),
+                    "scan_total": trader.scan_total or len(trader.config.get("symbols", [])),
+                    "binance_auth_status": getattr(trader, 'binance_auth_status', 'unknown'),
+                    "binance_auth_message": getattr(trader, 'binance_auth_message', None)
+                }
+            }
+            await asyncio.wait_for(websocket.send_json(minimal), timeout=5)
         except Exception:
-            # If initial send fails, try a minimal handshake but DON'T abort the connection.
-            logging.exception("Failed to send initial websocket state; attempting minimal handshake")
-            try:
-                minimal = {"type": "state", "data": {"running": bool(getattr(trader, 'running', False))}}
-                await asyncio.wait_for(websocket.send_json(minimal), timeout=3)
-            except Exception:
-                logging.exception("Failed to send minimal websocket handshake")
-            # Do not raise here; keep the connection open and let the receive/ping loop handle closure.
+            logging.exception("Failed to send minimal websocket handshake on connect")
+            # Continue; do not abort connection. Client will retry status over HTTP if needed.
 
         # Keep connection alive. Use a receive timeout so we can periodically
         # send lightweight pings if the client is silent and detect dead sockets.
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                await asyncio.wait_for(websocket.receive_text(), timeout=60)
             except asyncio.TimeoutError:
                 # send a lightweight ping/state timestamp to keep connection alive
                 try:
