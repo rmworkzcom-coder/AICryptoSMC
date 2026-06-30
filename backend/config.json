@@ -28,11 +28,11 @@
   "max_trade_loss_pct": 0.0,
   "max_trade_loss_usd": 25.0,
   "loss_freeze_duration_secs": 3600,
-  "running": true,
+  "running": false,
   "max_active_trades": 6,
   "selected_symbol": "HYPEUSDT",
   "dynamic_scan": true,
-  "max_scanned_coins": 350,
+  "max_scanned_coins": 30,
   "symbols": [
     "BTCUSDT",
     "ETHUSDT",

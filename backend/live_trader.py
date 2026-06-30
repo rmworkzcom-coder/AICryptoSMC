@@ -512,9 +512,9 @@ class LiveTrader:
 
         env_key = os.environ.get("BINANCE_KEY") or os.environ.get("BINANCE_API_KEY")
         env_secret = os.environ.get("BINANCE_SECRET") or os.environ.get("BINANCE_API_SECRET")
-            if env_key and env_secret and not (
-                self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
-            ):
+        if env_key and env_secret and not (
+            self.is_placeholder_key(env_key) or self.is_placeholder_key(env_secret)
+        ):
             os.environ.setdefault("BINANCE_API_KEY", env_key)
             os.environ.setdefault("BINANCE_KEY", env_key)
             os.environ.setdefault("BINANCE_API_SECRET", env_secret)
