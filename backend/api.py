@@ -113,6 +113,18 @@ def build_state_payload() -> Dict:
     active_trades = trader.active_trades
     balance = trader.paper_balance
 
+    # Normalize binance auth status for UI: avoid showing 'pending' when it's stale
+    auth_status = trader.binance_auth_status
+    try:
+        trading_mode = trader.config.get("trading_mode")
+    except Exception:
+        trading_mode = None
+    if auth_status == "pending":
+        if trading_mode != "live":
+            auth_status = "unknown"
+        elif getattr(trader, 'client', None) is None:
+            auth_status = "failed"
+
     return {
         "running": trader.running,
         "symbol": selected_symbol,
@@ -135,7 +147,7 @@ def build_state_payload() -> Dict:
         "scan_cycle_count": trader.scan_cycle_count,
         "trading_mode": trader.config.get("trading_mode", "paper"),
         "portfolio_margin": trader.config.get("portfolio_margin", False),
-        "binance_auth_status": trader.binance_auth_status,
+        "binance_auth_status": auth_status,
         "binance_auth_source": trader.binance_auth_source,
         "binance_auth_message": trader.binance_auth_message,
         "binance_auth_mode": trader.binance_auth_mode,
@@ -362,14 +374,14 @@ async def websocket_endpoint(websocket: WebSocket):
             # send the encoded state; increase timeout slightly for first send
             await asyncio.wait_for(websocket.send_json({"type": "state", "data": encoded_state}), timeout=5)
         except Exception:
-            # If initial send fails, close connection gracefully
+            # If initial send fails, try a minimal handshake but DON'T abort the connection.
             logging.exception("Failed to send initial websocket state; attempting minimal handshake")
             try:
                 minimal = {"type": "state", "data": {"running": bool(getattr(trader, 'running', False))}}
                 await asyncio.wait_for(websocket.send_json(minimal), timeout=3)
             except Exception:
                 logging.exception("Failed to send minimal websocket handshake")
-            raise
+            # Do not raise here; keep the connection open and let the receive/ping loop handle closure.
 
         # Keep connection alive. Use a receive timeout so we can periodically
         # send lightweight pings if the client is silent and detect dead sockets.

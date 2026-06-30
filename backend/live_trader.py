@@ -74,6 +74,8 @@ class LiveTrader:
         self._env_keys_cache = (None, None, None, 0.0)
         # Portfolio-level peak tracking for total PnL protection
         self.peak_total_pnl = float(self.paper_balance - DEFAULT_INITIAL_BALANCE)
+        # UI scanning indicator
+        self.scanning = False
 
     @property
     def active_trade(self) -> Optional[Dict]:
@@ -403,6 +405,7 @@ class LiveTrader:
             await self.websocket_broadcast_callback({
                 "type": "state",
                 "data": {
+                    "scanning": self.scanning,
                     "running": self.running,
                     "symbol": selected_symbol,
                     "selected_symbol": selected_symbol,
@@ -646,6 +649,13 @@ class LiveTrader:
             else:
                 self.log_message("No API keys found. Operating in public endpoint mode.", "info")
             self.client = None
+        # Ensure auth status reflects reality instead of lingering in 'pending'
+        if self.config.get("trading_mode") != "live":
+            self._set_auth_status("unknown", None, "Live trading is not enabled.", None)
+        else:
+            # If live mode is requested but client is not available, report failed auth
+            if not self.client:
+                self._set_auth_status("failed", source or None, "Binance API keys not configured or client initialization failed.", None)
 
     def _is_papi_unauthorized(self, exception: Exception) -> bool:
         if isinstance(exception, requests.exceptions.HTTPError):
@@ -1312,6 +1322,14 @@ class LiveTrader:
                 self.signals_found = 0
                 self.open_trades_created = 0
                 self.skipped_symbols = 0
+                # Mark scanning started and notify UI quickly
+                try:
+                    loop = asyncio.get_running_loop()
+                    self.scanning = True
+                    if loop.is_running():
+                        loop.create_task(self.broadcast_current_state())
+                except RuntimeError:
+                    pass
                 
                 # 1. Fetch data concurrently
                 dfs = await self.fetch_all_klines(symbols)
@@ -1386,6 +1404,15 @@ class LiveTrader:
                 # 3. Broadcast state to UI
                 await self.broadcast_current_state()
                 self.scan_cycle_count += 1
+
+                # Mark scanning finished and notify UI
+                try:
+                    loop = asyncio.get_running_loop()
+                    self.scanning = False
+                    if loop.is_running():
+                        loop.create_task(self.broadcast_current_state())
+                except RuntimeError:
+                    pass
 
                 # Log scan tick summary
                 elapsed = time.time() - start_time

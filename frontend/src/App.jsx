@@ -460,7 +460,10 @@ export default function App() {
           if (typeof d.binance_auth_message === 'string') {
             setBinanceAuthMessage(d.binance_auth_message);
           }
-          setIsScanning(false);
+          // Prefer explicit scanning flag from backend when provided
+          if (typeof d.scanning === 'boolean') {
+            setIsScanning(Boolean(d.scanning));
+          }
           if (d.trade_history) {
             setTradeHistory(d.trade_history);
           }
