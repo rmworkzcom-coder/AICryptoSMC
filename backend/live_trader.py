@@ -552,17 +552,18 @@ class LiveTrader:
                                     key = v
                                 elif k in ["BINANCE_SECRET", "BINANCE_API_SECRET"]:
                                     secret = v
-                            if key and secret and not (
-                                self.is_placeholder_key(key) or self.is_placeholder_key(secret)
-                            ):
-                                os.environ.setdefault("BINANCE_API_KEY", key)
-                                os.environ.setdefault("BINANCE_KEY", key)
-                                os.environ.setdefault("BINANCE_API_SECRET", secret)
-                                os.environ.setdefault("BINANCE_SECRET", secret)
-                                # Lower verbosity for file loads; keep timestamped cache to prevent repeats
-                                logger.debug(f"Loaded Binance API keys from {path}")
-                                self._env_keys_cache = (key, secret, path, now)
-                            return key, secret, path
+                        # After reading the whole file, if both key and secret were found, cache and return them
+                        if key and secret and not (
+                            self.is_placeholder_key(key) or self.is_placeholder_key(secret)
+                        ):
+                            os.environ.setdefault("BINANCE_API_KEY", key)
+                            os.environ.setdefault("BINANCE_KEY", key)
+                            os.environ.setdefault("BINANCE_API_SECRET", secret)
+                            os.environ.setdefault("BINANCE_SECRET", secret)
+                            # Lower verbosity for file loads; keep timestamped cache to prevent repeats
+                            logger.debug(f"Loaded Binance API keys from {path}")
+                            self._env_keys_cache = (key, secret, path, now)
+                        return key, secret, path
                 except Exception as e:
                     logger.error(f"Error reading env file at {path}: {e}")
 
