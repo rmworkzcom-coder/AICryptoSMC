@@ -1,0 +1,29 @@
+You are an expert automation/devops/dev agent tasked with building and verifying the AICryptoSMC project from a clean checkout. Follow these steps and return a concise report.
+
+Goals
+- Build and run the FastAPI backend and React frontend.
+- Verify Binance auth handling and expose recent successful auth to the UI.
+- Preserve trading gates; improve observability only.
+
+Steps
+1. Clone or use provided repository.
+2. Create Python venv and install `backend/requirements.txt`.
+3. Create `.env.local` with `BINANCE_API_KEY` and `BINANCE_API_SECRET`.
+4. Start backend: `PYTHONPATH=. venv/bin/python backend/main.py`.
+5. Start frontend: `cd frontend && npm install && npm run dev`.
+6. Confirm `GET /bot/status` returns `scanning` and `binance_last_success` fields.
+7. Confirm `POST /bot/check-auth` returns success with valid keys.
+8. Run a relaxed A/B experiment (lower `adx_threshold`, prune `symbols`) and collect logs for analysis.
+
+Acceptance criteria
+- `binance_last_success` present in `/bot/status`.
+- `POST /bot/check-auth` returns `success: true` with valid keys.
+- Frontend displays recent successful auth when in `paper` mode.
+
+Deliverables
+- A short report of steps and results.
+- Any patches applied as diffs or repo edits.
+- Collected experiment logs stored under `/tmp`.
+
+Notes
+- Do not include secrets in logs. Redact any API keys.

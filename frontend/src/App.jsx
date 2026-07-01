@@ -364,6 +364,9 @@ export default function App() {
     const targetUrl = useDirectConnection && websocketDirectUrl ? websocketDirectUrl : websocketProxyUrl;
     lastTriedDirectRef.current = targetUrl === websocketDirectUrl;
     setWebsocketUrl(targetUrl);
+    try {
+      console.debug('[WebSocket] connecting to', targetUrl);
+    } catch (e) {}
     setWebsocketStatus('connecting');
 
     const ws = new WebSocket(targetUrl);
@@ -666,7 +669,8 @@ export default function App() {
   }, [safeFetchJson]);
 
   useEffect(() => {
-    connectWebSocket();
+    // Force direct backend websocket in local development to avoid proxy edge-cases
+    connectWebSocket(true);
     fetchStatus();
     fetchConfig();
     fetchTrades();
