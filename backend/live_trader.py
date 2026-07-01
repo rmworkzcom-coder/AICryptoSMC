@@ -1037,6 +1037,9 @@ class LiveTrader:
                         'unrealized_pnl': unrealized_pnl,
                         'sl': sl,
                         'tp': tp,
+                        'entry_order_id': local_trade.get('entry_order_id') if symbol in self.active_trades else None,
+                        'sl_order_id': local_trade.get('sl_order_id') if symbol in self.active_trades else None,
+                        'tp_order_id': local_trade.get('tp_order_id') if symbol in self.active_trades else None,
                         'size': size,
                         'risk_amount': risk_amount,
                         'entry_time': entry_time,
@@ -2198,6 +2201,9 @@ class LiveTrader:
                                 "reduceOnly": "true"
                             })
                             trade_details['tp_order_id'] = tp_order.get('algoId')
+                            # Persist order ids immediately so closed trades keep exchange references
+                            self.log_message(f"[{symbol}] Recorded PAPI order IDs: entry={trade_details.get('entry_order_id')} sl={trade_details.get('sl_order_id')} tp={trade_details.get('tp_order_id')}")
+                            self.save_trades()
                         except requests.exceptions.HTTPError as e:
                             if self._is_papi_unauthorized(e):
                                 self.log_message(f"[{symbol}] Portfolio Margin PAPI unauthorized during order entry; falling back to standard futures for this order.", "warning")
@@ -2241,6 +2247,9 @@ class LiveTrader:
                             closePosition=True
                         )
                         trade_details['tp_order_id'] = tp_order['orderId']
+                        # Persist order ids immediately so closed trades keep exchange references
+                        self.log_message(f"[{symbol}] Recorded futures order IDs: entry={trade_details.get('entry_order_id')} sl={trade_details.get('sl_order_id')} tp={trade_details.get('tp_order_id')}")
+                        self.save_trades()
                     
                 else: # Spot trading
                     if trade_type == 'short':
@@ -2268,6 +2277,9 @@ class LiveTrader:
                                 stopLimitPrice=formatted_sl_limit,
                                 stopLimitTimeInForce='GTC'
                             )
+                            # Persist spot order ids (if any) after OCO placement
+                            self.log_message(f"[{symbol}] Recorded spot order IDs: entry={trade_details.get('entry_order_id')}")
+                            self.save_trades()
                         except Exception as oco_err:
                             self.log_message(f"[{symbol}] Failed to place OCO order: {oco_err}. Managing SL/TP in-loop.", "error")
                             
