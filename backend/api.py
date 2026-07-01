@@ -233,6 +233,16 @@ class BacktestRequest(BaseModel):
     breakeven_trigger: float = 1.0
     limit: int = 500
 
+
+class OpenTradeRequest(BaseModel):
+    symbol: Optional[str] = None
+    trade_type: str  # 'long' or 'short'
+    entry_price: Optional[float] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    size: Optional[float] = None
+    risk_usd: Optional[float] = None
+
 @app.get("/config")
 def get_config():
     return trader.config
@@ -288,6 +298,63 @@ async def get_trades():
         "paper_balance": trader.get_live_balance(),
         "initial_balance": DEFAULT_INITIAL_BALANCE
     }
+
+
+@app.post("/trades/open")
+def open_trade(req: OpenTradeRequest):
+    """Open a manual trade. If prices or size are omitted, the server will
+    attempt to compute sensible defaults using current price and config.
+    """
+    try:
+        symbol = req.symbol or trader.config.get("selected_symbol", trader.config.get("symbol", "BTCUSDT"))
+        trade_type = req.trade_type.lower()
+        if trade_type not in ("long", "short"):
+            raise HTTPException(status_code=400, detail="trade_type must be 'long' or 'short'")
+
+        entry_price = req.entry_price or trader.get_latest_price(symbol)
+        if not entry_price or entry_price <= 0:
+            raise HTTPException(status_code=400, detail=f"Unable to determine entry price for {symbol}")
+
+        # If SL/TP missing, attempt to infer from config and default risk sizing
+        sl = req.sl
+        tp = req.tp
+        size = req.size
+        risk_usd = req.risk_usd
+
+        if (sl is None or tp is None) and size is None:
+            # Try to infer using trader._infer_missing_sl_tp by reverse-engineering risk
+            rr = trader.config.get('rr_ratio', 2.0)
+            # Use a default risk_per_share (0.5% of entry)
+            est_risk_per_share = max(entry_price * 0.005, 1e-8)
+            if trade_type == 'long':
+                sl = sl or (entry_price - est_risk_per_share)
+                tp = tp or (entry_price + rr * est_risk_per_share)
+            else:
+                sl = sl or (entry_price + est_risk_per_share)
+                tp = tp or (entry_price - rr * est_risk_per_share)
+
+        # Size determination: prefer explicit size, then risk_usd, then risk_pct from config
+        if size is None:
+            if risk_usd is None:
+                risk_pct = trader.config.get('risk_pct', 1.0)
+                current_balance = trader.get_live_balance()
+                risk_usd = current_balance * (risk_pct / 100.0)
+            risk_per_share = abs(entry_price - sl) if sl is not None else max(entry_price * 0.005, 1e-8)
+            if risk_per_share <= 0:
+                raise HTTPException(status_code=400, detail="Computed non-positive risk per share")
+            size = risk_usd / risk_per_share
+
+        entry_time = int(time.time() * 1000)
+        trader.open_trade(symbol, trade_type, float(entry_price), float(sl), float(tp), float(size), float(risk_usd or 0.0), entry_time, 0)
+        return {
+            "status": "ok",
+            "active_trades": trader.active_trades,
+            "trade_history": trader.trade_history,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/trades/reset")
 async def reset_trades():
