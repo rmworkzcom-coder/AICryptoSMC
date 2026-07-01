@@ -405,7 +405,19 @@ def get_logs(lines: int = 100):
 
 @app.websocket("/api/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except Exception as e:
+        logging.exception(f"Failed to accept websocket: {e}")
+        return
+    # Log client and handshake headers for debugging intermittent disconnects
+    try:
+        client_info = getattr(websocket, 'client', None)
+        scope_headers = websocket.scope.get('headers', []) if hasattr(websocket, 'scope') else []
+        headers = {k.decode(): v.decode() for k, v in scope_headers}
+        logging.info(f"WebSocket /api/ws [accepted] client={client_info} headers={headers}")
+    except Exception:
+        logging.exception("Error logging websocket handshake details")
     connected_websockets.append(websocket)
     try:
         # Send a minimal initial handshake only. The frontend will fetch full status via HTTP.
@@ -445,11 +457,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         logging.exception("WebSocket error")
     finally:
-        if websocket in connected_websockets:
-            try:
+        try:
+            if websocket in connected_websockets:
                 connected_websockets.remove(websocket)
-            except Exception:
-                pass
+        except Exception:
+            logging.exception("Failed to remove websocket from connected list on cleanup")
 
 @app.on_event("startup")
 async def startup_event():

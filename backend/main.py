@@ -15,5 +15,5 @@ if __name__ == "__main__":
         with open(log_file, "w") as f:
             f.write("")
 
-    # Run FastAPI server
-    uvicorn.run("backend.api:app", host="0.0.0.0", port=8005, reload=True)
+    # Run FastAPI server without auto-reload for stable WebSocket connections
+    uvicorn.run("backend.api:app", host="0.0.0.0", port=8005, reload=False)
