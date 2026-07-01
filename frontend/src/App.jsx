@@ -670,7 +670,8 @@ export default function App() {
 
   useEffect(() => {
     // Force direct backend websocket in local development to avoid proxy edge-cases
-    connectWebSocket(true);
+    // Prefer the dev-server proxy websocket to avoid cross-origin issues in the browser
+    connectWebSocket(false);
     fetchStatus();
     fetchConfig();
     fetchTrades();
