@@ -52,12 +52,16 @@ connected_websockets: List[WebSocket] = []
 async def broadcast_to_websockets(msg: Dict):
     to_remove = []
     send_tasks = []
+    logging.info(f"Broadcast requested: msg_type={msg.get('type')} current_connected={len(connected_websockets)}")
 
     async def _send(ws: WebSocket):
         try:
             # Ensure message is JSON serializable
             encoded = jsonable_encoder(msg)
+            client_info = getattr(ws, 'client', None)
+            logging.debug(f"Sending websocket message to client={client_info} msg_type={msg.get('type')}")
             await asyncio.wait_for(ws.send_json(encoded), timeout=5)
+            logging.debug(f"Successfully sent websocket message to client={client_info}")
         except Exception as e:
             # Log detailed info for debugging intermittent websocket failures
             client_info = getattr(ws, 'client', None)
@@ -82,6 +86,23 @@ async def broadcast_to_websockets(msg: Dict):
             except Exception:
                 pass
             connected_websockets.remove(ws)
+    logging.info(f"Broadcast complete: attempted={len(send_tasks)} remaining_connected={len(connected_websockets)}")
+
+
+@app.post("/_internal/ws/test-broadcast")
+async def _internal_test_broadcast():
+    """Internal endpoint used to test websocket broadcasts from the running server.
+    Sends a short test message to all currently connected websockets and returns counts.
+    """
+    # Snapshot current clients
+    attempted = len(list(connected_websockets))
+    test_msg = {
+        "type": "test",
+        "data": {"message": "internal test broadcast", "ts": int(time.time() * 1000)}
+    }
+    await broadcast_to_websockets(test_msg)
+    remaining = len(connected_websockets)
+    return {"status": "ok", "attempted": attempted, "remaining": remaining}
 
 # Wire live trader to broadcast messages through websockets
 trader.websocket_broadcast_callback = broadcast_to_websockets
