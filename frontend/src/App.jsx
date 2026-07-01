@@ -670,8 +670,8 @@ export default function App() {
 
   useEffect(() => {
     // Force direct backend websocket in local development to avoid proxy edge-cases
-    // Prefer the dev-server proxy websocket to avoid cross-origin issues in the browser
-    connectWebSocket(false);
+    // Prefer direct connection to backend WS to avoid vite proxy handshake errors
+    connectWebSocket(true);
     fetchStatus();
     fetchConfig();
     fetchTrades();
