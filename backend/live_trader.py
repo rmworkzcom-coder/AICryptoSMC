@@ -1623,6 +1623,33 @@ class LiveTrader:
                     self.close_trade(symbol, exit_price, pnl, "RISK_CAP")
                     return
 
+            # Universal hard-floor after peak: if this trade was once profitable
+            # (peak_price moved in favor) but current PnL has dropped below the
+            # configured minimum to keep, close it. This covers cases where a
+            # trade was briefly positive then retraced under the $ floor.
+            try:
+                min_profit_to_keep_usd = float(self.config.get("min_profit_to_keep_usd", 1.0))
+                # compute current_pnl and peak_pnl using latest prices
+                if trade_type == 'long':
+                    peak_pnl = (trade.get('peak_price', entry_price) - entry_price) * size
+                    current_pnl = (current_price - entry_price) * size
+                else:
+                    peak_pnl = (entry_price - trade.get('peak_price', entry_price)) * size
+                    current_pnl = (entry_price - current_price) * size
+
+                if peak_pnl > 0.0 and current_pnl <= min_profit_to_keep_usd:
+                    pnl = current_pnl
+                    self.paper_balance += pnl
+                    exit_price = current_low if trade_type == 'long' else current_high
+                    self.log_message(
+                        f"[{symbol}] Peak->floor close: peak_pnl={peak_pnl:.2f}, current_pnl={current_pnl:.2f} <= min_keep {min_profit_to_keep_usd:.2f}. Closing."
+                    )
+                    self.close_trade(symbol, exit_price, pnl, "HARD_FLOOR_AFTER_PEAK")
+                    return
+            except Exception:
+                # Be defensive: don't let this auxiliary check crash the trade loop
+                logger.exception(f"Error evaluating hard-floor-after-peak for {symbol}")
+
             # Trailing Stop Loss Adjustment
             trailing_activation = self.config.get("trailing_stop_activation_pct", 0.0)
             trailing_distance = self.config.get("trailing_stop_distance_pct", 0.0)
