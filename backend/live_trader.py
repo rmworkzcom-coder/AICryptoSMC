@@ -443,6 +443,12 @@ class LiveTrader:
             logger.error(f"Error broadcasting state: {e}")
 
     def update_config(self, new_config: Dict):
+        # Normalize aliases: accept 'test' as an alias for 'paper' (test mode)
+        if "trading_mode" in new_config and isinstance(new_config.get("trading_mode"), str):
+            if new_config.get("trading_mode") == "test":
+                new_config["trading_mode"] = "paper"
+                self.log_message("Received 'test' trading_mode alias; treating as 'paper' (test mode).", "info")
+
         self.config.update(new_config)
         self.save_config()
 
@@ -1590,13 +1596,40 @@ class LiveTrader:
                         return
 
                 # Hard close threshold: apply regardless of whether a positive peak was recorded.
-                if current_pnl <= min_profit_to_keep_usd:
-                    self.log_message(
-                        f"[{symbol}] Hard-floor close: current PnL {current_pnl:.2f} <= min keep {min_profit_to_keep_usd:.2f}. Closing."
-                    )
-                    pnl = current_pnl
+                # Use intrabar extremum (low for longs, high for shorts) in addition to close
+                # when deciding the hard-floor close so we don't miss rapid reversals within
+                # the candle that would otherwise go undetected if only using the close price.
+                if trade_type == 'long':
+                    current_pnl_close = (current_price - entry_price) * size
+                    current_pnl_low = (current_low - entry_price) * size
+                    hard_floor_triggered = (current_pnl_close <= min_profit_to_keep_usd) or (current_pnl_low <= min_profit_to_keep_usd)
+                else:
+                    current_pnl_close = (entry_price - current_price) * size
+                    current_pnl_high = (entry_price - current_high) * size
+                    hard_floor_triggered = (current_pnl_close <= min_profit_to_keep_usd) or (current_pnl_high <= min_profit_to_keep_usd)
+
+                if hard_floor_triggered:
+                    # Log both close-based and extremum-based pnls for debugging
+                    try:
+                        if trade_type == 'long':
+                            self.log_message(
+                                f"[{symbol}] Hard-floor close: close_pnl={current_pnl_close:.2f}, low_pnl={current_pnl_low:.2f}, min_keep={min_profit_to_keep_usd:.2f}. Closing."
+                            )
+                            pnl = min(current_pnl_close, current_pnl_low)
+                            exit_price = current_low
+                        else:
+                            self.log_message(
+                                f"[{symbol}] Hard-floor close: close_pnl={current_pnl_close:.2f}, high_pnl={current_pnl_high:.2f}, min_keep={min_profit_to_keep_usd:.2f}. Closing."
+                            )
+                            pnl = min(current_pnl_close, current_pnl_high)
+                            exit_price = current_high
+                    except Exception:
+                        # Fallback: use previously computed current_pnl
+                        self.log_message(f"[{symbol}] Hard-floor close triggered (fallback). Closing.")
+                        pnl = current_pnl
+                        exit_price = current_low if trade_type == 'long' else current_high
+
                     self.paper_balance += pnl
-                    exit_price = current_low if trade_type == 'long' else current_high
                     self.close_trade(symbol, exit_price, pnl, "HARD_FLOOR")
                     return
 

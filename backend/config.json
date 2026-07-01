@@ -2,7 +2,7 @@
   "binance_api_key": "mFMZQ71twT7gVujePVEyNyuTCbhUcWXWMtgZvpkEtlPqeZ1YZ7r9FUk6eiBt6MqJ",
   "binance_api_secret": "bmGfhiBHwnSlJYTp5X2IzcoCsA60dGdxFNVMSXDHcpG35itF5qISoMfospPiSJGK",
   "testnet": false,
-  "trading_mode": "live",
+  "trading_mode": "paper",
   "daily_drawdown_limit_pct": 0.0,
   "adx_threshold": 8.0,
   "trailing_stop_activation_pct": 1.5,
