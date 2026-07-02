@@ -66,10 +66,9 @@ async def broadcast_to_websockets(msg: Dict):
             # Log detailed info for debugging intermittent websocket failures
             client_info = getattr(ws, 'client', None)
             try:
-                logging.error(f"WebSocket send failed to client={client_info}: {e}")
-                logging.exception(e)
+                logging.warning(f"WebSocket send failed to client={client_info}: {e}")
             except Exception:
-                logging.exception("WebSocket send failed (error while logging client info)")
+                logging.warning("WebSocket send failed (error while logging client info)")
             to_remove.append(ws)
 
     for ws in list(connected_websockets):
@@ -243,6 +242,10 @@ class OpenTradeRequest(BaseModel):
     size: Optional[float] = None
     risk_usd: Optional[float] = None
 
+
+class UnfreezeRequest(BaseModel):
+    symbol: str
+
 @app.get("/config")
 def get_config():
     return trader.config
@@ -366,6 +369,34 @@ async def reset_trades():
         "paper_balance": trader.get_live_balance(),
         "initial_balance": DEFAULT_INITIAL_BALANCE
     }
+
+
+@app.post("/trades/unfreeze")
+def unfreeze_trade(req: UnfreezeRequest):
+    """Remove a symbol from the frozen_symbols map so it can be re-entered."""
+    symbol = req.symbol
+    if symbol in trader.frozen_symbols:
+        try:
+            del trader.frozen_symbols[symbol]
+            trader.save_trades()
+            return {"status": "success", "message": f"Unfroze {symbol}"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "not_found", "message": f"{symbol} was not frozen"}
+
+
+@app.post("/trades/backfill")
+def backfill_trades():
+    """Trigger background backfill of missing order IDs from PAPI for historical trades.
+    Returns a brief summary of updated records.
+    """
+    try:
+        if trader.config.get('trading_mode') != 'live' and not trader.config.get('portfolio_margin', False):
+            return {"status": "skipped", "message": "Backfill requires live portfolio_margin mode enabled."}
+        res = trader.backfill_missing_order_ids()
+        return {"status": "ok", "updated": res.get('updated', 0), "scanned": res.get('scanned', 0)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/trades/liquidate")
 async def liquidate_trades(symbol: Optional[str] = None):
@@ -496,7 +527,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.accept()
     except Exception as e:
-        logging.exception(f"Failed to accept websocket: {e}")
+        logging.warning(f"Failed to accept websocket: {e}")
         return
     # Log client and handshake headers for debugging intermittent disconnects
     try:
@@ -505,7 +536,7 @@ async def websocket_endpoint(websocket: WebSocket):
         headers = {k.decode(): v.decode() for k, v in scope_headers}
         logging.info(f"WebSocket /api/ws [accepted] client={client_info} headers={headers}")
     except Exception:
-        logging.exception("Error logging websocket handshake details")
+        logging.warning("Error logging websocket handshake details")
     connected_websockets.append(websocket)
     try:
         # Send a minimal initial handshake only. The frontend will fetch full status via HTTP.
@@ -521,35 +552,54 @@ async def websocket_endpoint(websocket: WebSocket):
             }
             await asyncio.wait_for(websocket.send_json(minimal), timeout=5)
         except Exception:
-            logging.exception("Failed to send minimal websocket handshake on connect")
+            logging.info("Failed to send minimal websocket handshake on connect (ignored)")
             # Continue; do not abort connection. Client will retry status over HTTP if needed.
 
-        # Keep connection alive. Use a receive timeout so we can periodically
-        # send lightweight pings if the client is silent and detect dead sockets.
+        # Keep connection alive. Send periodic lightweight app-level pings
+        # but do not require an application-text 'pong' from the client. Rely
+        # on protocol-level close/errors (exceptions) to detect dead sockets.
+        PING_INTERVAL = 30
+
+        async def _send_ping():
+            try:
+                await websocket.send_json({"type": "ping", "time": int(time.time() * 1000)})
+            except Exception:
+                raise
+
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=60)
+                # Wait for incoming text; if none arrives within the ping interval
+                # we'll send a ping. Any incoming text will reset the receive timer.
+                msg = await asyncio.wait_for(websocket.receive_text(), timeout=PING_INTERVAL)
+                # Ignore application messages (frontend fetches state via HTTP).
+                continue
             except asyncio.TimeoutError:
-                # send a lightweight ping/state timestamp to keep connection alive
+                # Send a ping to encourage clients that expect an app-level ping.
                 try:
-                    await asyncio.wait_for(websocket.send_json({"type": "ping", "time": int(time.time() * 1000)}), timeout=3)
+                    await asyncio.wait_for(_send_ping(), timeout=5)
                 except Exception:
+                    logging.warning("WebSocket ping failed; closing connection")
                     break
             except WebSocketDisconnect:
                 break
-            except Exception:
-                logging.exception("WebSocket error during receive")
+            except Exception as e:
+                logging.warning(f"WebSocket error during receive (closing): {e}")
+                break
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logging.warning(f"WebSocket error during receive (closing): {e}")
                 break
     except WebSocketDisconnect:
         pass
     except Exception:
-        logging.exception("WebSocket error")
+        logging.warning("WebSocket error")
     finally:
         try:
             if websocket in connected_websockets:
                 connected_websockets.remove(websocket)
         except Exception:
-            logging.exception("Failed to remove websocket from connected list on cleanup")
+            logging.warning("Failed to remove websocket from connected list on cleanup")
 
 @app.on_event("startup")
 async def startup_event():

@@ -729,43 +729,97 @@ class LiveTrader:
             params = {}
             
         # Ensure timestamp and recvWindow are present
-        timestamp = int(time.time() * 1000)
-        payload = {**params, "recvWindow": 10000, "timestamp": timestamp}
-        
-        # Sort and construct query string (percent-encode to handle non-ASCII/special characters)
+        def _build_payload(ts_ms: int):
+            return {**params, "recvWindow": 10000, "timestamp": int(ts_ms)}
+
+        # Helper to sign a payload
         from urllib.parse import urlencode
-        query_string = urlencode(sorted(payload.items()))
-        
-        # Calculate HMAC signature
-        signature = hmac.new(
-            api_secret.encode("utf-8"),
-            query_string.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
-        
+        def _sign_payload(payload_obj: dict):
+            qs = urlencode(sorted(payload_obj.items()))
+            sig = hmac.new(api_secret.encode("utf-8"), qs.encode("utf-8"), hashlib.sha256).hexdigest()
+            return sig, qs
+
         headers = {
             "X-MBX-APIKEY": api_key,
             "Content-Type": "application/x-www-form-urlencoded"
         }
-        
+
         url = f"{base_url}{endpoint}"
-        
-        try:
-            if method == "GET" or method == "DELETE":
-                url = f"{url}?{query_string}&signature={signature}"
-                res = requests.request(method, url, headers=headers, timeout=10)
-            else: # POST, PUT, etc.
-                post_data = f"{query_string}&signature={signature}"
-                res = requests.request(method, url, headers=headers, data=post_data, timeout=10)
-                
-            res.raise_for_status()
-            return res.json()
-        except requests.exceptions.HTTPError as e:
-            resp_text = res.text if 'res' in locals() else 'No response'
-            if self._is_api_unauthorized(e):
-                self.log_message("Portfolio Margin request unauthorized. Falling back if possible.", "warning")
-            logger.error(f"PAPI API Request failed: {e}. Response body: {resp_text}")
-            raise e
+
+        # Attempt with a small retry loop to handle timestamp/recvWindow errors and transient failures
+        attempts = 3
+        backoff = 0.5
+        last_exc = None
+        for attempt in range(1, attempts + 1):
+            try:
+                # Try to use local time first
+                ts_ms = int(time.time() * 1000)
+                payload = _build_payload(ts_ms)
+                signature, qs = _sign_payload(payload)
+
+                if method in ("GET", "DELETE"):
+                    req_url = f"{url}?{qs}&signature={signature}"
+                    res = self.requests_session.request(method, req_url, headers=headers, timeout=10)
+                else:
+                    post_data = f"{qs}&signature={signature}"
+                    res = self.requests_session.request(method, url, headers=headers, data=post_data, timeout=10)
+
+                res.raise_for_status()
+                return res.json()
+            except requests.exceptions.HTTPError as e:
+                last_exc = e
+                resp = getattr(e, 'response', None)
+                resp_text = resp.text if resp is not None else ''
+                # Try to detect timestamp/recvWindow errors and resync server time
+                body = {}
+                try:
+                    if resp is not None:
+                        body = resp.json()
+                except Exception:
+                    body = {}
+                code = body.get('code') if isinstance(body, dict) else None
+                msg = (body.get('msg') or '').lower() if isinstance(body, dict) else ''
+                if code == -1021 or 'timestamp' in msg or 'recvwindow' in msg or 'timestamp for this request' in msg:
+                    try:
+                        server_time = None
+                        try:
+                            r = self.requests_session.get('https://api.binance.com/api/v3/time', timeout=5)
+                            if r.status_code == 200:
+                                server_time = r.json().get('serverTime')
+                        except Exception:
+                            pass
+                        if server_time:
+                            payload = _build_payload(server_time)
+                            signature, qs = _sign_payload(payload)
+                            if method in ("GET", "DELETE"):
+                                req_url = f"{url}?{qs}&signature={signature}"
+                                res = self.requests_session.request(method, req_url, headers=headers, timeout=10)
+                            else:
+                                post_data = f"{qs}&signature={signature}"
+                                res = self.requests_session.request(method, url, headers=headers, data=post_data, timeout=10)
+                            res.raise_for_status()
+                            return res.json()
+                    except Exception as ee:
+                        last_exc = ee
+                        logger.warning(f"PAPI time sync retry failed: {ee}")
+                # Unauthorized -> don't retry
+                if self._is_api_unauthorized(e):
+                    self.log_message("Portfolio Margin request unauthorized. Falling back if possible.", "warning")
+                    logger.error(f"PAPI API Request unauthorized: {resp_text}")
+                    raise e
+                logger.warning(f"PAPI request attempt {attempt} failed: {resp_text or e}. Retrying in {backoff}s...")
+                time.sleep(backoff)
+                backoff *= 2
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"PAPI request attempt {attempt} exception: {e}. Retrying in {backoff}s...")
+                time.sleep(backoff)
+                backoff *= 2
+
+        logger.error(f"PAPI API Request failed after {attempts} attempts: {last_exc}")
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("PAPI request failed without exception details")
 
     def _is_api_unauthorized(self, exception: Exception) -> bool:
         text = str(exception).lower()
@@ -1061,6 +1115,94 @@ class LiveTrader:
             self._log_binance_api_warning(f"Error fetching live exchange positions: {e}")
             
         return self.active_trades
+
+    def backfill_missing_order_ids(self, lookback_days: int = 7) -> Dict[str, int]:
+        """Attempt to backfill missing `entry_order_id`/`sl_order_id`/`tp_order_id` in trade_history
+        by querying PAPI `allOrders` for each symbol and matching by timestamp/price heuristics.
+        Returns a summary dict with counts of updated entries.
+        """
+        updated = 0
+        scanned = 0
+        portfolio_margin = self.config.get('portfolio_margin', False)
+        if not portfolio_margin:
+            # Backfill only supported for Portfolio Margin via PAPI
+            logger.info("Backfill skipped: portfolio_margin not enabled")
+            return {"updated": 0, "scanned": 0}
+
+        # Build a mapping symbol -> orders from PAPI to avoid repeated calls
+        orders_cache = {}
+
+        for idx, th in enumerate(self.trade_history):
+            scanned += 1
+            if th.get('entry_order_id'):
+                continue
+            symbol = th.get('symbol')
+            if not symbol:
+                continue
+
+            # Fetch orders for symbol if not cached
+            if symbol not in orders_cache:
+                try:
+                    res = self._make_papi_request("GET", "/papi/v1/um/allOrders", {"symbol": symbol, "limit": 1000})
+                    if isinstance(res, list):
+                        orders_cache[symbol] = res
+                    else:
+                        orders_cache[symbol] = []
+                except Exception as e:
+                    logger.warning(f"Failed to fetch allOrders for {symbol}: {e}")
+                    orders_cache[symbol] = []
+
+            orders = orders_cache.get(symbol, [])
+            if not orders:
+                continue
+
+            # Heuristic: find a filled order with same side and similar price within a time window
+            entry_time = int(th.get('entry_time', 0))
+            entry_price = float(th.get('entry_price', 0.0) or 0.0)
+            side = 'BUY' if th.get('type') == 'long' else 'SELL'
+
+            best_match = None
+            best_score = None
+            for o in orders:
+                try:
+                    if str(o.get('side', '')).upper() != side:
+                        continue
+                    status = str(o.get('status', '')).upper()
+                    if status not in ('FILLED', 'PARTIALLY_FILLED', 'NEW', 'FILLED'):
+                        # still consider NEW/partially filled as potential
+                        pass
+                    o_time = int(o.get('time') or o.get('transactTime') or 0)
+                    o_price = float(o.get('price') or o.get('avgPrice') or 0.0)
+                    # Time delta in ms
+                    dt = abs(entry_time - o_time) if entry_time and o_time else None
+                    price_diff = abs(entry_price - o_price) if entry_price and o_price else None
+                    # Score: prefer closer time then price
+                    score = 0
+                    if dt is not None:
+                        score += dt // 1000
+                    if price_diff is not None and price_diff > 0:
+                        score += int(price_diff * 100000)
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_match = o
+                except Exception:
+                    continue
+
+            if best_match:
+                try:
+                    th['entry_order_id'] = best_match.get('orderId') or best_match.get('orderId')
+                    # attempt to set algo ids if present
+                    th['sl_order_id'] = best_match.get('slOrderId') or th.get('sl_order_id')
+                    th['tp_order_id'] = best_match.get('tpOrderId') or th.get('tp_order_id')
+                    self.trade_history[idx] = th
+                    updated += 1
+                except Exception:
+                    continue
+
+        if updated > 0:
+            self.save_trades()
+
+        return {"updated": updated, "scanned": scanned}
 
     def _infer_missing_sl_tp(self, trade_type: str, entry_price: float, size: float, risk_amount: float) -> Tuple[Optional[float], Optional[float]]:
         if entry_price <= 0 or size <= 0:
