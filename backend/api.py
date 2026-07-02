@@ -524,10 +524,11 @@ def get_logs(lines: int = 100):
 
 @app.websocket("/api/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    client_info = None
     try:
         await websocket.accept()
     except Exception as e:
-        logging.warning(f"Failed to accept websocket: {e}")
+        logging.exception("Failed to accept websocket")
         return
     # Log client and handshake headers for debugging intermittent disconnects
     try:
@@ -536,8 +537,9 @@ async def websocket_endpoint(websocket: WebSocket):
         headers = {k.decode(): v.decode() for k, v in scope_headers}
         logging.info(f"WebSocket /api/ws [accepted] client={client_info} headers={headers}")
     except Exception:
-        logging.warning("Error logging websocket handshake details")
+        logging.exception("Error logging websocket handshake details")
     connected_websockets.append(websocket)
+    logging.info(f"WebSocket /api/ws [registered] client={client_info} connected={len(connected_websockets)}")
     try:
         # Send a minimal initial handshake only. The frontend will fetch full status via HTTP.
         try:
@@ -552,7 +554,7 @@ async def websocket_endpoint(websocket: WebSocket):
             }
             await asyncio.wait_for(websocket.send_json(minimal), timeout=5)
         except Exception:
-            logging.info("Failed to send minimal websocket handshake on connect (ignored)")
+            logging.exception("Failed to send minimal websocket handshake on connect")
             # Continue; do not abort connection. Client will retry status over HTTP if needed.
 
         # Keep connection alive. Use low-level receive() so we properly handle
@@ -583,9 +585,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 elif etype == 'websocket.disconnect':
                     # client requested close
+                    logging.info(f"WebSocket /api/ws [disconnect-event] client={client_info} code={event.get('code')}")
                     break
                 else:
                     # Unknown event types are tolerated; continue loop
+                    logging.debug(f"WebSocket /api/ws [event] client={client_info} type={etype}")
                     continue
             except asyncio.TimeoutError:
                 # No event within the interval — send an app-level ping and keep-alive
@@ -594,25 +598,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception as e:
                     # Don't immediately close the connection on a transient ping send error.
                     # Log the failure and allow the receive loop to detect disconnects.
-                    logging.warning(f"WebSocket ping failed ({e}); continuing and awaiting next event")
+                    logging.exception(f"WebSocket ping failed for client={client_info}; continuing and awaiting next event")
                     # Small backoff to avoid busy-looping on persistent send failures
                     await asyncio.sleep(1)
                     continue
             except WebSocketDisconnect:
+                logging.info(f"WebSocket /api/ws [WebSocketDisconnect] client={client_info}")
                 break
             except Exception as e:
-                logging.warning(f"WebSocket error during receive (closing): {e}")
+                logging.exception(f"WebSocket error during receive (closing) client={client_info}")
                 break
     except WebSocketDisconnect:
-        pass
+        logging.info(f"WebSocket /api/ws [outer-disconnect] client={client_info}")
     except Exception:
-        logging.warning("WebSocket error")
+        logging.exception(f"WebSocket /api/ws [outer-error] client={client_info}")
     finally:
         try:
             if websocket in connected_websockets:
                 connected_websockets.remove(websocket)
+            logging.info(f"WebSocket /api/ws [cleanup] client={client_info} connected={len(connected_websockets)}")
         except Exception:
-            logging.warning("Failed to remove websocket from connected list on cleanup")
+            logging.exception("Failed to remove websocket from connected list on cleanup")
 
 @app.on_event("startup")
 async def startup_event():

@@ -356,6 +356,10 @@ export default function App() {
 
   const connectWebSocket = useCallback(function connect(useDirect) {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      wsRef.current.onopen = null;
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
       wsRef.current.close();
     }
     clearReconnectTimer();
@@ -671,6 +675,7 @@ export default function App() {
   useEffect(() => {
     // Force direct backend websocket in local development to avoid proxy edge-cases
     // Prefer direct connection to backend WS to avoid vite proxy handshake errors
+    shouldReconnectRef.current = true;
     connectWebSocket(true);
     fetchStatus();
     fetchConfig();
