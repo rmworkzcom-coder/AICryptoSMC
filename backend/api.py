@@ -555,36 +555,45 @@ async def websocket_endpoint(websocket: WebSocket):
             logging.info("Failed to send minimal websocket handshake on connect (ignored)")
             # Continue; do not abort connection. Client will retry status over HTTP if needed.
 
-        # Keep connection alive. Send periodic lightweight app-level pings
-        # but do not require an application-text 'pong' from the client. Rely
-        # on protocol-level close/errors (exceptions) to detect dead sockets.
+        # Keep connection alive. Use low-level receive() so we properly handle
+        # protocol-level events (text/binary/close) and avoid relying on an
+        # application-level "pong" string. Periodically send lightweight
+        # app-level pings to prompt clients that expect them.
         PING_INTERVAL = 30
 
         async def _send_ping():
-            try:
-                await websocket.send_json({"type": "ping", "time": int(time.time() * 1000)})
-            except Exception:
-                raise
+            await websocket.send_json({"type": "ping", "time": int(time.time() * 1000)})
 
         while True:
             try:
-                # Wait for incoming text; if none arrives within the ping interval
-                # we'll send a ping. Any incoming text will reset the receive timer.
-                msg = await asyncio.wait_for(websocket.receive_text(), timeout=PING_INTERVAL)
-                # Ignore application messages (frontend fetches state via HTTP).
-                continue
+                # Wait for any websocket event (receive text/binary or disconnect)
+                event = await asyncio.wait_for(websocket.receive(), timeout=PING_INTERVAL)
+                etype = event.get('type')
+                # If a normal text message arrives, ignore it (frontend polls HTTP)
+                if etype == 'websocket.receive':
+                    # reset timer by continuing; if text exists, optionally inspect
+                    # for debug-friendly messages but do not demand a literal 'pong'
+                    text = event.get('text')
+                    if text:
+                        try:
+                            # quietly parse JSON if provided and ignore
+                            _ = json.loads(text)
+                        except Exception:
+                            pass
+                    continue
+                elif etype == 'websocket.disconnect':
+                    # client requested close
+                    break
+                else:
+                    # Unknown event types are tolerated; continue loop
+                    continue
             except asyncio.TimeoutError:
-                # Send a ping to encourage clients that expect an app-level ping.
+                # No event within the interval — send an app-level ping and keep-alive
                 try:
                     await asyncio.wait_for(_send_ping(), timeout=5)
                 except Exception:
                     logging.warning("WebSocket ping failed; closing connection")
                     break
-            except WebSocketDisconnect:
-                break
-            except Exception as e:
-                logging.warning(f"WebSocket error during receive (closing): {e}")
-                break
             except WebSocketDisconnect:
                 break
             except Exception as e:
