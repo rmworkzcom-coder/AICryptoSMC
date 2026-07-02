@@ -1689,6 +1689,37 @@ class LiveTrader:
                 trade['peak_price'] = min(peak_price, current_low)
             peak_price = trade['peak_price']
 
+            # USD-threshold close: if either the current unrealized PnL or the
+            # configured risk_amount falls below this dollar threshold, close
+            # the trade immediately. This helps remove negligible or dust
+            # positions that shouldn't remain open.
+            try:
+                usd_close_threshold = float(self.config.get("usd_close_threshold", 1.0))
+            except Exception:
+                usd_close_threshold = 1.0
+            if usd_close_threshold > 0.0:
+                mark_price = float(trade.get('mark_price', 0.0) or current_price)
+                if mark_price <= 0.0:
+                    mark_price = current_price
+                try:
+                    if trade_type == 'long':
+                        current_pnl_val = (mark_price - entry_price) * size
+                    else:
+                        current_pnl_val = (entry_price - mark_price) * size
+                except Exception:
+                    current_pnl_val = 0.0
+
+                risk_amount_val = float(trade.get('risk_amount', 0.0) or 0.0)
+                if (current_pnl_val <= usd_close_threshold) or (risk_amount_val <= usd_close_threshold):
+                    self.log_message(
+                        f"[{symbol}] USD-threshold close triggered. current_pnl={current_pnl_val:.2f}, risk_amount={risk_amount_val:.2f} <= {usd_close_threshold:.2f}."
+                    )
+                    pnl = current_pnl_val
+                    exit_price = current_low if trade_type == 'long' else current_high
+                    self.paper_balance += pnl
+                    self.close_trade(symbol, exit_price, pnl, "USD_THRESHOLD")
+                    return
+
             # Peak profit retracement exit
             peak_profit_retrace_pct = self.config.get("peak_profit_retrace_pct", 20.0)
             peak_profit_retrace_min_usd = self.config.get("peak_profit_retrace_min_usd", 0.0)

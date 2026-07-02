@@ -591,9 +591,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 # No event within the interval — send an app-level ping and keep-alive
                 try:
                     await asyncio.wait_for(_send_ping(), timeout=5)
-                except Exception:
-                    logging.warning("WebSocket ping failed; closing connection")
-                    break
+                except Exception as e:
+                    # Don't immediately close the connection on a transient ping send error.
+                    # Log the failure and allow the receive loop to detect disconnects.
+                    logging.warning(f"WebSocket ping failed ({e}); continuing and awaiting next event")
+                    # Small backoff to avoid busy-looping on persistent send failures
+                    await asyncio.sleep(1)
+                    continue
             except WebSocketDisconnect:
                 break
             except Exception as e:
